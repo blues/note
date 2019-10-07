@@ -1,0 +1,23 @@
+// Copyright 2017 Blues Inc.  All rights reserved.
+// Use of this source code is governed by licenses granted by the
+// copyright holder including that found in the LICENSE file.
+
+notelib.NotehubPB.MessageType max_size:25
+notelib.NotehubPB.Error max_size:250
+notelib.NotehubPB.DeviceUID max_size:100
+notelib.NotehubPB.ProductUID max_size:100
+notelib.NotehubPB.DeviceEndpointID max_size:100
+notelib.NotehubPB.HubEndpointID max_size:100
+notelib.NotehubPB.HubSessionHandler max_size:250
+notelib.NotehubPB.NotefileID max_size:100
+notelib.NotehubPB.NotefileIDs max_size:250
+notelib.NotehubPB.HubSessionTicket max_size:128
+notelib.NotehubPB.DeviceSN max_size:250
+notelib.NotehubPB.NoteID max_size:100
+notelib.NotehubPB.CellID max_size:100
+
+
+
+
+
+

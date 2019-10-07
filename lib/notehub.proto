@@ -1,0 +1,48 @@
+// Copyright 2017 Blues Inc.  All rights reserved.
+// Use of this source code is governed by licenses granted by the
+// copyright holder including that found in the LICENSE file.
+
+syntax = "proto2";
+
+// Package notelib notehub.proto are the protocol definitions for notebox-notehub comms
+package notelib;
+
+message NotehubPB {
+    optional int64 Version = 1;
+    optional string MessageType = 2;
+    optional string Error = 3;
+    optional string DeviceUID = 4;
+    optional string DeviceEndpointID = 5;
+    optional int64 HubTimeNs = 6;
+    optional string HubEndpointID = 7;
+    optional string HubSessionTicket = 8;
+    optional string HubSessionHandler = 9;
+    optional int64 HubSessionTicketExpiresTimeSec = 10;
+    optional string NotefileID = 11;
+    optional string NotefileIDs = 12;
+    optional int64 Since = 13;
+    optional int64 Until = 14;
+    optional int64 MaxChanges = 15;
+    optional string DeviceSN = 16;
+    optional string NoteID = 17;
+    optional int64 SessionIDPrev = 18;
+    optional int64 SessionIDNext = 19;
+    optional bool SessionIDMismatch = 20;
+    optional int64 Bytes1 = 21;
+    optional int64 Bytes2 = 22;
+    optional int64 Bytes3 = 23;
+    optional int64 Bytes4 = 24;
+    optional string ProductUID = 25;
+    optional int64 UsageProvisioned = 26;
+    optional uint32 UsageRcvdBytes = 27;
+    optional uint32 UsageSentBytes = 28;
+    optional uint32 UsageTCPSessions = 29;
+    optional uint32 UsageTLSSessions = 30;
+    optional uint32 UsageRcvdNotes = 31;
+    optional uint32 UsageSentNotes = 32;
+    optional string CellID = 33;
+    optional bool NotificationSession = 34;
+    optional int32 Voltage100 = 35;
+    optional int32 Temp100 = 36;
+}
+
