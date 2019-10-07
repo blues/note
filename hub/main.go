@@ -7,7 +7,7 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"github.com/blues/hub/notelib"
+	"github.com/blues/note/lib"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -39,15 +39,19 @@ func main() {
 	serverPortTCP = ":8001"
 	serverPortTCPS = ":8002"
 
-	// Initialize callbacks
-	notelib.FileSetStorageLocation(os.Getenv("HOME") + "/notefiles")
+	// Initialize file system folders
+	eventLogInit(os.Getenv("HOME") + "/note/events")
+	notelib.FileSetStorageLocation(os.Getenv("HOME") + "/note/notefiles")
+
+	// Set discovery callback
 	notelib.HubSetDiscover(NotehubDiscover)
 
 	// Spawn the TCP listeners
 	go tcpHandler()
 	go tcpsHandler()
-	fmt.Printf("\nON DEVICE, SET HOST USING:\n{\"req\":\"service.set\",\"host\":\"tcp:%s%s|tcps:%s%s\"}\n\n",
+	fmt.Printf("\nON DEVICE, CONNECT TO THIS SERVER USING:\n{\"req\":\"service.set\",\"host\":\"tcp:%s%s|tcps:%s%s\"}\n",
 		serverAddress, serverPortTCP, serverAddress, serverPortTCPS)
+	fmt.Printf("TO RESTORE DEVICE'S HUB CONFIGURATION, USE:\n{\"req\":\"service.set\",\"host\":\"-\"}\n\n")
 
 	// Wait forever
 	for {

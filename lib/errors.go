@@ -71,6 +71,9 @@ const ErrTransportWaitModule = "{wait-module}"
 // ErrAuth (golint)
 const ErrAuth = "{auth}"
 
+// ErrTicket (golint)
+const ErrTicket = "{ticket}"
+
 // ErrHubNoHandler (golint)
 const ErrHubNoHandler = "{no-handler}"
 

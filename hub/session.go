@@ -7,7 +7,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/blues/hub/notelib"
+	"github.com/blues/note/lib"
 	"net"
 )
 

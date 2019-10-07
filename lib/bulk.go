@@ -16,7 +16,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/blues/hub/jsonxt"
+	"github.com/blues/note/jsonxt"
 	"github.com/golang/snappy"
 	"io"
 	"math"

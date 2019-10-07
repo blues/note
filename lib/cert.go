@@ -5,7 +5,10 @@
 // Package notelib cert.go contains certificates
 package notelib
 
-func GetNotecardSecureElementRootCertificateAsPEM() ([]byte cert) {
+// GetNotecardSecureElementRootCertificateAsPEM is the ST Microelectronics root certificate
+// used to generate the certificate embedded in every Notecard's STSAFE-A100 secure element
+// at point of chip manufacture.
+func GetNotecardSecureElementRootCertificateAsPEM() (cert []byte) {
 	return []byte(`
 -----BEGIN CERTIFICATE-----
 MIIB3TCCAWOgAwIBAgIBATAKBggqhkjOPQQDAzBPMQswCQYDVQQGEwJOTDEeMBwG

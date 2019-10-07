@@ -11,7 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	"github.com/blues/hub/notelib"
+	"github.com/blues/note/lib"
 	"io/ioutil"
 	"math/big"
 	"net"
@@ -27,12 +27,12 @@ func tcpsHandler() {
 	fmt.Printf("Serving requests on tcps:%s%s\n", serverAddress, serverPortTCPS)
 
 	// Load our certs
-	serviceCertFile, err := ioutil.ReadFile("tls/minhub.crt")
+	serviceCertFile, err := ioutil.ReadFile("tls/hub.crt")
 	if err != nil {
-		fmt.Printf("tcps: error reading hub cert: %s\n", err)
+		fmt.Printf("tcps: error reading hub certificate: %s\n", err)
 		return
 	}
-	serviceKeyFile, err := ioutil.ReadFile("tls/minhub.key")
+	serviceKeyFile, err := ioutil.ReadFile("tls/hub.key")
 	if err != nil {
 		fmt.Printf("tcps: error reading hub key: %s\n", err)
 		return

@@ -866,20 +866,20 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.DeviceEndpointID = req.DeviceEndpointID
 	session.HubEndpointID = req.HubEndpointID
 	session.HubSessionTicket = req.HubSessionTicket
-	session.SessionLog.This.Since = req.UsageProvisioned
-	session.SessionLog.This.RcvdBytes = req.UsageRcvdBytes
-	session.SessionLog.This.SentBytes = req.UsageSentBytes
-	session.SessionLog.This.TCPSessions = req.UsageTCPSessions
-	session.SessionLog.This.TLSSessions = req.UsageTLSSessions
-	session.SessionLog.This.RcvdNotes = req.UsageRcvdNotes
-	session.SessionLog.This.SentNotes = req.UsageSentNotes
+	session.Session.This.Since = req.UsageProvisioned
+	session.Session.This.RcvdBytes = req.UsageRcvdBytes
+	session.Session.This.SentBytes = req.UsageSentBytes
+	session.Session.This.TCPSessions = req.UsageTCPSessions
+	session.Session.This.TLSSessions = req.UsageTLSSessions
+	session.Session.This.RcvdNotes = req.UsageRcvdNotes
+	session.Session.This.SentNotes = req.UsageSentNotes
 	var mcc, mnc, lac, cellid, rssi, sinr int
 	fmt.Sscanf(req.CellID, "%d,%d,%d,%d,%d,%d", &mcc, &mnc, &lac, &cellid, &rssi, &sinr)
-	session.SessionLog.CellID = fmt.Sprintf("%d,%d,%d,%d", mcc, mnc, lac, cellid)
-	session.SessionLog.Rssi = rssi
-	session.SessionLog.Sinr = sinr
-	session.SessionLog.Voltage = float64(req.Voltage100) / 100
-	session.SessionLog.Temp = float64(req.Temp100) / 100
+	session.Session.CellID = fmt.Sprintf("%d,%d,%d,%d", mcc, mnc, lac, cellid)
+	session.Session.Rssi = rssi
+	session.Session.Sinr = sinr
+	session.Session.Voltage = float64(req.Voltage100) / 100
+	session.Session.Temp = float64(req.Temp100) / 100
 	session.Notification = req.NotificationSession
 	if req.MessageType == msgDiscover {
 		session.Discovery = true

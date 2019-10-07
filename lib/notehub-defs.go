@@ -103,7 +103,7 @@ type HubSessionContext struct {
 	DeviceEndpointID string
 	HubEndpointID    string
 	HubSessionTicket string
-	SessionLog       note.DeviceSession
+	Session          note.DeviceSession
 	Transactions     int
 	EventQ           *chan HubSessionEvent
 	LatestUpdated    bool

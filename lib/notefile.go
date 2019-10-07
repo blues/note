@@ -310,9 +310,11 @@ func (nf *Notefile) event(local bool, NoteID string) {
 	event.DeviceUID = nf.eventDeviceUID
 	event.DeviceSN = nf.eventDeviceSN
 	event.ProductUID = nf.eventProductUID
-	app := note.EventApp{}
-	event.App = &app
-	event.App.AppUID = nf.eventAppUID
+	if (nf.eventAppUID != "") {
+		app := note.EventApp{}
+		event.App = &app
+		event.App.AppUID = nf.eventAppUID
+	}
 	event.Payload = xnote.Payload
 	if xnote.Body != nil {
 		event.Body = &xnote.Body
@@ -325,7 +327,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 
 	// Debug
 	if debugEvent {
-		debugf("event: %s %s %s %s %s", event.Req, event.NotefileID, event.App.AppUID, event.DeviceUID, event.ProductUID)
+		debugf("event: %s %s %s %s %s", event.Req, event.NotefileID, nf.eventAppUID, event.DeviceUID, event.ProductUID)
 		if len(event.Payload) > 0 {
 			if event.Bulk {
 				debugf(" (%d-byte BULK payload)", len(event.Payload))

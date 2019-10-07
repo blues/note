@@ -112,8 +112,8 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 
 				// If the ticket isn't an exact match, then it's not a valid connect attemp
 				if sessionTicket == "" || sessionTicket != req.HubSessionTicket {
-					err = fmt.Errorf("session not authorized " + ErrAuth)
-					debugf("TICKET REJECTED for %s\n    Assigned: %s\n   Requested: %s\n", req.DeviceUID, sessionTicket, req.HubSessionTicket)
+					err = fmt.Errorf("session not authorized " + ErrAuth + ErrTicket)
+					debugf("TICKET REJECTED for %s (server may have been restarted)\n    Assigned: %s\n   Requested: %s\n", req.DeviceUID, sessionTicket, req.HubSessionTicket)
 				}
 			}
 		}
@@ -133,14 +133,14 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 			req.DeviceEndpointID = session.DeviceEndpointID
 			req.HubEndpointID = session.HubEndpointID
 			req.HubSessionTicket = session.HubSessionTicket
-			req.UsageProvisioned = session.SessionLog.This.Since
-			req.UsageRcvdBytes = session.SessionLog.This.RcvdBytes
-			req.UsageSentBytes = session.SessionLog.This.SentBytes
-			req.UsageTCPSessions = session.SessionLog.This.TCPSessions
-			req.UsageTLSSessions = session.SessionLog.This.TLSSessions
-			req.UsageRcvdNotes = session.SessionLog.This.RcvdNotes
-			req.UsageSentNotes = session.SessionLog.This.SentNotes
-			req.CellID = session.SessionLog.CellID
+			req.UsageProvisioned = session.Session.This.Since
+			req.UsageRcvdBytes = session.Session.This.RcvdBytes
+			req.UsageSentBytes = session.Session.This.SentBytes
+			req.UsageTCPSessions = session.Session.This.TCPSessions
+			req.UsageTLSSessions = session.Session.This.TLSSessions
+			req.UsageRcvdNotes = session.Session.This.RcvdNotes
+			req.UsageSentNotes = session.Session.This.SentNotes
+			req.CellID = session.Session.CellID
 			req.NotificationSession = session.Notification
 		}
 
@@ -165,30 +165,30 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 		session.Active = true
 
 		// Return info to the client about itself
-		if session.SessionLog.Where.OLC != "" {
+		if session.Session.Where.OLC != "" {
 
 			// Load the location to compute cell offset, if possible
 			shortZone := ""
 			offsetSecondsEastOfUTC := 0
-			location, err := time.LoadLocation(session.SessionLog.Where.TimeZone)
+			location, err := time.LoadLocation(session.Session.Where.TimeZone)
 			if err != nil {
-				fmt.Printf("*** Can't load location for: %s\n", session.SessionLog.Where.TimeZone)
+				fmt.Printf("*** Can't load location for: %s\n", session.Session.Where.TimeZone)
 			} else {
 				localTime := time.Now().In(location)
 				shortZone, offsetSecondsEastOfUTC = localTime.Zone()
 			}
 
 			// Return everything packed into the CellID field
-			rsp.CellID = session.SessionLog.Where.OLC
-			rsp.CellID += "|" + session.SessionLog.Where.CountryCode
-			rsp.CellID += "|" + session.SessionLog.Where.TimeZone
+			rsp.CellID = session.Session.Where.OLC
+			rsp.CellID += "|" + session.Session.Where.CountryCode
+			rsp.CellID += "|" + session.Session.Where.TimeZone
 			rsp.CellID += "|" + shortZone
 			if shortZone != "" {
 				rsp.CellID += "|" + fmt.Sprintf("%d", offsetSecondsEastOfUTC/60)
 			} else {
 				rsp.CellID += "|"
 			}
-			rsp.CellID += "|" + session.SessionLog.Where.Name
+			rsp.CellID += "|" + session.Session.Where.Name
 
 		}
 

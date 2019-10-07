@@ -5,14 +5,30 @@
 package main
 
 import (
-	"encoding/json"
+	"os"
 	"fmt"
-	"github.com/blues/hub/notelib"
+	"time"
+	"strings"
+	"encoding/json"
+	"github.com/blues/note/lib"
 	"github.com/blues/note-go/note"
 )
 
+// Event log directory
+var eventLogDirectory string
+
+// Initialize the event log
+func eventLogInit(dir string) {
+	eventLogDirectory = dir
+	os.MkdirAll(eventLogDirectory, 0777)
+}
+
 // Event handling procedure
 func notehubEvent(context interface{}, local bool, file *notelib.Notefile, event *note.Event) (err error) {
+
+	// Retrieve the session context
+    var session *notelib.HubSessionContext
+    session = context.(*notelib.HubSessionContext)
 
 	// If this is a queue and this is a template note, recursively expand it to multiple notifications
 	if event.Bulk {
@@ -22,13 +38,35 @@ func notehubEvent(context interface{}, local bool, file *notelib.Notefile, event
 		return
 	}
 
-	// Process the request by just printing out the request
+	// Clean the event before sending it out
+	if event.Sent {
+		event.NoteID = ""
+		event.Sent = false
+		event.Deleted = false
+	}
+	event.Routed = time.Now().UTC().Unix()
+	event.TowerID = session.Session.CellID
+
+	// Marshal the event in a tightly-compressed manner, preparing to output it as Newline-Delimited JSON (NDJSON)
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("\nEVENT TO BE PROCESSED OR ROUTED:\n%s\n", string(eventJSON))
+	eventNDJSON := string(eventJSON) + "\r\n"
 
+	// Generate a valid log file name
+	filename := fmt.Sprintf("%s-%s", time.Now().UTC().Format("2006-01-02"), event.DeviceUID)
+	filename = strings.Replace(filename, "imei:", "", 1) + ".json"
+
+	// Append the JSON to the file
+	f, err := os.OpenFile(eventLogDirectory+"/"+filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644) 
+	if err == nil {
+		f.WriteString(eventNDJSON) 
+		f.Close()
+	}
+
+	// Done
+	fmt.Printf("event: appended to %s\n", filename)
 	return
 
 }

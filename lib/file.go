@@ -11,7 +11,7 @@ import (
 )
 
 // Default filename
-const defaultFileStorageName = "notebox"
+const defaultFileStorageName = "notefiles"
 
 // Root storage location
 var fsRootStorageLocation = "."
@@ -252,7 +252,7 @@ func fsWriteNotefile(file *Notefile, container string, object string) (err error
 	// Convert to JSON
 	jsonNotefile, err := file.uConvertToJSON(true)
 	if err != nil {
-		debugf("error converting %d-note notefile %s to json: %s\n", len(file.Notes), object, err)
+		debugf("file: error converting %d-note notefile %s to json: %s\n", len(file.Notes), object, err)
 		return err
 	}
 
@@ -265,7 +265,7 @@ func fsWriteNotefile(file *Notefile, container string, object string) (err error
 
 	// Debug
 	if debugFile {
-		debugf("File: wrote %s %db containing %d notes\n", object, len(jsonNotefile), len(file.Notes))
+		debugf("file: wrote %s %db containing %d notes\n", object, len(jsonNotefile), len(file.Notes))
 	}
 
 	// Done
@@ -280,20 +280,19 @@ func fsReadNotefile(container string, object string) (notefile *Notefile, err er
 	path := fsObjectsToPath(container, object)
 	contents, err := fio.ReadJSON(path)
 	if err != nil {
-		debugf("error reading notefile %s: %s\n", object, err)
 		return &Notefile{}, err
 	}
 
 	// Unmarshal the contents
 	file, err := ConvertJSONToNotefile(contents)
 	if err != nil {
-		debugf("error converting notefile %s to json: %s\n", object, err)
+		debugf("file: error converting notefile %s to json: %s\n", object, err)
 		return &Notefile{}, err
 	}
 
 	// Debug
 	if debugFile {
-		debugf("File: read %s %db containing %d notes\n", object, len(contents), len(file.Notes))
+		debugf("file: read %s %db containing %d notes\n", object, len(contents), len(file.Notes))
 	}
 
 	// Done
