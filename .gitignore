@@ -1,0 +1,40 @@
+**/.idea
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+hub/hub
+
+# env files
+*.env
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Go build outputs
+**/build
+
+# Packer generated manifest files
+packer-manifest.json
+packer-manifest.json.lock
+
+# auto- generated files #
+######################
+*~
+\#*\#
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# VS Code configuration files
+.vscode
