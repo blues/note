@@ -284,7 +284,7 @@ func fsReadNotefile(container string, object string) (notefile *Notefile, err er
 	}
 
 	// Unmarshal the contents
-	file, err := ConvertJSONToNotefile(contents)
+	file, err := jsonConvertJSONToNotefile(contents)
 	if err != nil {
 		debugf("file: error converting notefile %s to json: %s\n", object, err)
 		return &Notefile{}, err

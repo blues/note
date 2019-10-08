@@ -38,14 +38,14 @@ func notehubEvent(context interface{}, local bool, file *notelib.Notefile, event
 		return
 	}
 
-	// Clean the event before sending it out
-	if event.Sent {
-		event.NoteID = ""
-		event.Sent = false
-		event.Deleted = false
+	// Don't record events for environment variable updates
+	if event.NotefileID == "_env.dbs" {
+		return
 	}
-	event.Routed = time.Now().UTC().Unix()
+
+	// Add info about session and when routed
 	event.TowerID = session.Session.CellID
+	event.Routed = time.Now().UTC().Unix()
 
 	// Marshal the event in a tightly-compressed manner, preparing to output it as Newline-Delimited JSON (NDJSON)
 	eventJSON, err := json.Marshal(event)

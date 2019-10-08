@@ -9,6 +9,9 @@ import (
 	"github.com/blues/note-go/note"
 )
 
+// ReservedIDDelimiter is used to separate lists of noteIDs, notefileIDs, endpointIDs, thus is invalid in names
+const ReservedIDDelimiter = ","
+
 // The current version of the edge/notehub message protocol
 const currentProtocolVersion = 0
 
@@ -103,14 +106,13 @@ type HubSessionContext struct {
 	DeviceEndpointID string
 	HubEndpointID    string
 	HubSessionTicket string
-	Session          note.DeviceSession
 	Transactions     int
 	EventQ           *chan HubSessionEvent
 	LatestUpdated    bool
 	Latest           *map[string]note.Event
 	RouteInfo        map[string]interface{}
-	Voltage          float64
-	Temp             float64
+	// Fields that are useful when logged in a session log
+	Session          note.DeviceSession
 	// Cached Where info, used by event processing for efficiency
 	CachedWhereLat      float64
 	CachedWhereLon      float64
@@ -127,3 +129,7 @@ type HubSessionEvent struct {
 	Event   note.Event
 	Exit    bool
 }
+
+// HTTPUserAgent is the HTTP user agent for all our uses of HTTP
+const HTTPUserAgent = "notes"
+

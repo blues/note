@@ -908,11 +908,11 @@ func (box *Notebox) Notefile() (notefile *Notefile) {
 	return boxopenfile.notefile
 }
 
-// ConvertToJSON serializes/marshals the in-memory Notebox into a JSON buffer
-func (box *Notebox) ConvertToJSON(fIndent bool) (output []byte, err error) {
+// convertToJSON serializes/marshals the in-memory Notebox into a JSON buffer
+func (box *Notebox) convertToJSON(fIndent bool) (output []byte, err error) {
 	boxopenfile, _ := box.openfiles[box.storage]
 	boxfile := boxopenfile.notefile
-	return boxfile.ConvertToJSON(fIndent)
+	return boxfile.convertToJSON(fIndent)
 }
 
 // OpenNotefile opens a notefile, reading it from storage and bumping its refcount. As such,

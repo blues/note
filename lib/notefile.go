@@ -43,11 +43,14 @@ type Tracker struct {
 	SessionID int64 `json:"i,omitempty"`
 }
 
-// InboundQueuesProcessedByNotifier defines whether or not the local behavior
+// defaultMaxGetChangesBatchSize is the default for the max of changes that we'll return in a batch of GetChanges.
+const defaultMaxGetChangesBatchSize = 10
+
+// inboundQueuesProcessedByNotifier defines whether or not the local behavior
 // is that queues are processed by the notifier, or if they
 // are processed externally.  On devices, inbound queues are processed by the
 // app which looks for them.  On the service, inbound queues are processed by the notifier.
-const InboundQueuesProcessedByNotifier = true
+const inboundQueuesProcessedByNotifier = true
 
 // For now, we use just a single mutex to protect all operations
 // for notefiles. If we were to protect each notebox with its own mutex,
@@ -220,10 +223,10 @@ func (nf *Notefile) GetNote(noteID string) (xnote note.Note, err error) {
 
 }
 
-// ProcessEvent handles a notification command
+// processEvent handles a notification command
 // NOTE that for Update/Add/Delete, it is up to the caller to replace
 // event.EndpointID as appropriate as the source for the operation!
-func (nf *Notefile) ProcessEvent(event note.Event) (err error) {
+func (nf *Notefile) processEvent(event note.Event) (err error) {
 
 	// Perform the desired action
 	switch event.Req {
@@ -325,6 +328,13 @@ func (nf *Notefile) event(local bool, NoteID string) {
 		event.Where = histories[0].Where
 	}
 
+	// Clean the event in case it's a queue event
+	if event.Sent {
+		event.NoteID = ""
+		event.Sent = false
+		event.Deleted = false
+	}
+
 	// Debug
 	if debugEvent {
 		debugf("event: %s %s %s %s %s", event.Req, event.NotefileID, nf.eventAppUID, event.DeviceUID, event.ProductUID)
@@ -357,7 +367,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 			debugf("event error: %s\n", err)
 		} else {
 			event.Req = event.Rsp
-			err = nf.ProcessEvent(event)
+			err = nf.processEvent(event)
 			if err != nil {
 				debugf("error processing event response: %s\n", err)
 			}
@@ -400,7 +410,7 @@ func (nf *Notefile) uAddNote(endpointID string, noteID string, xnote *note.Note,
 
 	// Append the first history
 	noteHistories := []note.History{}
-	noteHistories = append(noteHistories, NewHistory(endpointID, 0, "", 0))
+	noteHistories = append(noteHistories, newHistory(endpointID, 0, "", 0))
 	xnote.Histories = &noteHistories
 
 	// Do it
@@ -482,7 +492,7 @@ func (nf *Notefile) uUpdateNote(endpointID string, noteID string, xnote *note.No
 	}
 
 	// Update the history, etc
-	UpdateNote(xnote, endpointID, false, false)
+	updateNote(xnote, endpointID, false, false)
 
 	// Replace it
 	return nf.uReplaceNote(noteID, xnote)
@@ -527,7 +537,7 @@ func (nf *Notefile) uDeleteNote(endpointID string, noteID string, xnote *note.No
 	}
 
 	// Update the history, etc
-	UpdateNote(xnote, endpointID, false, true)
+	updateNote(xnote, endpointID, false, true)
 
 	// Replace it
 	return nf.uReplaceNote(noteID, xnote)
@@ -565,8 +575,8 @@ func (nf *Notefile) DeleteNote(endpointID string, noteID string) error {
 
 }
 
-// ResolveNoteConflicts resolves all conflicts that are pending for a Note in a Notefile
-func (nf *Notefile) ResolveNoteConflicts(endpointID string, noteID string, xnote note.Note) error {
+// resolveNoteConflicts resolves all conflicts that are pending for a Note in a Notefile
+func (nf *Notefile) resolveNoteConflicts(endpointID string, noteID string, xnote note.Note) error {
 
 	// Lock for writing
 	nfLock.Lock()
@@ -577,7 +587,7 @@ func (nf *Notefile) ResolveNoteConflicts(endpointID string, noteID string, xnote
 		return fmt.Errorf(ErrNoteNoExist+" cannot resolve conflicts: note not found: %s", noteID)
 	}
 
-	UpdateNote(&xnote, endpointID, true, false)
+	updateNote(&xnote, endpointID, true, false)
 	xnote.Change = nf.Change
 	nf.Change++
 	nf.Notes[noteID] = xnote
@@ -610,11 +620,11 @@ func (nf *Notefile) uGetMergeNoteChangeList(fromNotefile *Notefile) (notelist []
 
 		if present {
 			LocalNote := nf.Notes[fromNoteID]
-			ConflictDataDiffers, CompareResult := CompareModified(LocalNote, fromNote)
+			ConflictDataDiffers, CompareResult := compareModified(LocalNote, fromNote)
 			NeedToMerge :=
 				(ConflictDataDiffers) ||
 					(CompareResult == -1) ||
-					((CompareResult == 1) && (!IsSubsumedBy(fromNote, LocalNote)))
+					((CompareResult == 1) && (!isSubsumedBy(fromNote, LocalNote)))
 
 			if !NeedToMerge {
 				continue
@@ -687,13 +697,13 @@ func (nf *Notefile) MergeNotefile(fromNotefile Notefile) error {
 	// behavior of queues
 	for i := range modifiedNoteIDs {
 		nf.event(false, modifiedNoteIDs[i])
-		if InboundQueuesProcessedByNotifier {
+		if inboundQueuesProcessedByNotifier {
 			if nf.Queue {
 				nf.DeleteNote(note.DefaultHubEndpointID, modifiedNoteIDs[i])
 			}
 		}
 	}
-	if InboundQueuesProcessedByNotifier {
+	if inboundQueuesProcessedByNotifier {
 		if nf.Queue {
 			nf.PurgeTombstones(note.DefaultHubEndpointID)
 		}
@@ -931,7 +941,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 
 	// If a maximum batch size hasn't been specified, artificially constrain it
 	if maxBatchSize == 0 {
-		maxBatchSize = DefaultMaxGetChangesBatchSize
+		maxBatchSize = defaultMaxGetChangesBatchSize
 	}
 
 	// Debug

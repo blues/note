@@ -7,8 +7,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/blues/note/lib"
 	"net"
+	"github.com/blues/note/lib"
+	"github.com/google/uuid"
 )
 
 // Process requests for the duration of a session being open
@@ -20,6 +21,7 @@ func sessionHandler(connSession net.Conn, secure bool) {
 	// Always start with a blank, inactive Session Context
 	sessionContext := notelib.HubSessionContext{}
 	sessionContext.Secure = secure
+	sessionContext.Session.SessionUID = uuid.New().String()
 	for {
 		var request, response []byte
 		var err error

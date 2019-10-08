@@ -2,7 +2,6 @@
 // Use of this source code is governed by licenses granted by the
 // copyright holder including that found in the LICENSE file.
 
-// Package notelib japi.go provides a JSON API to the most common set of local functions
 package notelib
 
 import (

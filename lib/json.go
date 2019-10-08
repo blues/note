@@ -14,8 +14,8 @@ import (
 	"github.com/blues/note-go/note"
 )
 
-// ConvertJSONToNotefile deserializes/unmarshals a JSON buffer to an in-memory Notefile.
-func ConvertJSONToNotefile(jsonNotefile []byte) (Notefile, error) {
+// jsonConvertJSONToNotefile deserializes/unmarshals a JSON buffer to an in-memory Notefile.
+func jsonConvertJSONToNotefile(jsonNotefile []byte) (Notefile, error) {
 
 	// Unmarshal the JSON
 	newNotefile := Notefile{}
@@ -50,8 +50,8 @@ func (file *Notefile) uConvertToJSON(indent bool) (output []byte, err error) {
 	return
 }
 
-// ConvertToJSON serializes/marshals the in-memory Notefile into a JSON buffer
-func (file *Notefile) ConvertToJSON(indent bool) (output []byte, err error) {
+// convertToJSON serializes/marshals the in-memory Notefile into a JSON buffer
+func (file *Notefile) convertToJSON(indent bool) (output []byte, err error) {
 
 	// Lock for reading
 	nfLock.RLock()

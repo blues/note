@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// UpdateNote performs the bulk of Note Update, Delete, Merge operations
-func UpdateNote(xnote *note.Note, endpointID string, resolveConflicts bool, deleted bool) {
+// updateNote performs the bulk of Note Update, Delete, Merge operations
+func updateNote(xnote *note.Note, endpointID string, resolveConflicts bool, deleted bool) {
 	var when int64
 	var where string
 
@@ -43,7 +43,7 @@ func UpdateNote(xnote *note.Note, endpointID string, resolveConflicts bool, dele
 	xnote.Histories = &newHistories
 
 	// Create a new history
-	newHistory := NewHistory(endpointID, when, where, sequence)
+	newHistory := newHistory(endpointID, when, where, sequence)
 
 	// Insert newHistory at offset 0, then append the old history
 	histories := copyOrCreateBlankHistory(nil)
@@ -133,13 +133,13 @@ func UpdateNote(xnote *note.Note, endpointID string, resolveConflicts bool, dele
 
 }
 
-// CompareModified compares two Notes, and returns
+// compareModified compares two Notes, and returns
 //     1 if local note is newer than incoming note
 //    -1 if incoming note is newer than local note
 //     0 if notes are equal
 //  conflictDataDiffers is returned as true if they
 //     are equal but their conflict data is different
-func CompareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffers bool, result int) {
+func compareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffers bool, result int) {
 
 	if incomingNote.Updates > xnote.Updates {
 		return false, -1
@@ -188,7 +188,7 @@ func CompareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffe
 
 				for index2 := 0; index2 < len(incomingNoteConflicts); index2++ {
 					incomingConflictNote := incomingNoteConflicts[index2]
-					_, compareResult := CompareModified(incomingConflictNote, localConflictNote)
+					_, compareResult := compareModified(incomingConflictNote, localConflictNote)
 					if compareResult == 0 {
 						matchingConflict = true
 						break
@@ -209,8 +209,8 @@ func CompareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffe
 
 }
 
-// IsSubsumedBy determines whether or not this Note was subsumed by changes to another
-func IsSubsumedBy(xnote note.Note, incomingNote note.Note) bool {
+// isSubsumedBy determines whether or not this Note was subsumed by changes to another
+func isSubsumedBy(xnote note.Note, incomingNote note.Note) bool {
 
 	noteHistories := copyOrCreateNonblankHistory(xnote.Histories)
 	incomingNoteHistories := copyOrCreateNonblankHistory(incomingNote.Histories)
@@ -233,7 +233,7 @@ func IsSubsumedBy(xnote note.Note, incomingNote note.Note) bool {
 	if !isSubsumed {
 		for index := 0; index < len(incomingNoteConflicts); index++ {
 			incomingConflict := incomingNoteConflicts[index]
-			if IsSubsumedBy(xnote, incomingConflict) {
+			if isSubsumedBy(xnote, incomingConflict) {
 				isSubsumed = true
 				break
 			}
@@ -248,14 +248,14 @@ func IsSubsumedBy(xnote note.Note, incomingNote note.Note) bool {
 		isSubsumed = false
 
 		localConflict := noteConflicts[index]
-		if IsSubsumedBy(localConflict, incomingNote) {
+		if isSubsumedBy(localConflict, incomingNote) {
 			isSubsumed = true
 			break
 		}
 
 		for index2 := 0; index2 < len(incomingNoteConflicts); index2++ {
 			incomingConflict := incomingNoteConflicts[index2]
-			if IsSubsumedBy(localConflict, incomingConflict) {
+			if isSubsumedBy(localConflict, incomingConflict) {
 				isSubsumed = true
 				break
 			}
@@ -291,12 +291,12 @@ func copyOrCreateNonblankHistory(historiesToCopy *[]note.History) []note.History
 		return *historiesToCopy
 	}
 	histories := []note.History{}
-	histories = append(histories, NewHistory("", 0, "", 0))
+	histories = append(histories, newHistory("", 0, "", 0))
 	return histories
 }
 
-// NewHistory creates a history entry for a Note being modified
-func NewHistory(endpointID string, when int64, where string, sequence int32) note.History {
+// newHistory creates a history entry for a Note being modified
+func newHistory(endpointID string, when int64, where string, sequence int32) note.History {
 
 	newHistory := note.History{}
 	newHistory.EndpointID = endpointID
@@ -355,7 +355,7 @@ func Merge(localNote *note.Note, incomingNote *note.Note) note.Note {
 	winnerNoteConflicts := copyOrCreateBlankConflict(nil)
 	for index := 0; index < len(mergeResultNotes); index++ {
 		mergeResultNote := mergeResultNotes[index]
-		_, compareResult := CompareModified(*winnerNote, mergeResultNote)
+		_, compareResult := compareModified(*winnerNote, mergeResultNote)
 		if 0 == compareResult {
 			continue
 		}
@@ -410,7 +410,7 @@ func mergeNotes(outerNotes *[]note.Note, innerNotes *[]note.Note, mergeNotes *[]
 
 		needToAssignWinner := (winnerNote == nil)
 		if !needToAssignWinner {
-			_, compareResult := CompareModified(*winnerNote, (*outerNotes)[outerNotesIndex])
+			_, compareResult := compareModified(*winnerNote, (*outerNotes)[outerNotesIndex])
 			needToAssignWinner = (-1 == compareResult)
 		}
 		if needToAssignWinner {
