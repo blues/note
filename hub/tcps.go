@@ -66,7 +66,7 @@ func tcpsHandler() {
 	tlsConfig.BuildNameToCertificate()
 	connServer, err := TLSListen("tcp", serverPortTCPS, tlsConfig)
 	if err != nil {
-		fmt.Errorf("tcps: error listening on port %s: %s\n", serverPortTCPS, err)
+		fmt.Errorf("tcps: error listening on port %s: %s", serverPortTCPS, err)
 		return
 	}
 	defer connServer.Close()

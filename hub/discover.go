@@ -5,8 +5,8 @@
 package main
 
 import (
-	"github.com/blues/note/lib"
 	"github.com/blues/note-go/note"
+	"github.com/blues/note/lib"
 	"time"
 )
 

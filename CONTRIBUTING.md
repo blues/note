@@ -1,4 +1,4 @@
-# Contributing to blues/note-go
+# Contributing to blues/note
 
 We love pull requests from everyone. By participating in this project, you
 agree to abide by the Blues Inc [code of conduct].
@@ -18,7 +18,7 @@ clean up inconsistent whitespace )
 * by closing [issues][]
 * by reviewing patches
 
-[issues]: https://blues.github.com/note-go/issues
+[issues]: https://blues.github.com/note/issues
 
 ## Submitting an Issue
 
@@ -53,7 +53,7 @@ clean up inconsistent whitespace )
 * accepted. If you don't know how to add tests, please put in a PR and leave a
 * comment asking for help. We love helping!
 
-[repo]: https://github.com/blues/note-go/tree/master
+[repo]: https://github.com/blues/note/tree/master
 [fork]: https://help.github.com/articles/fork-a-repo/
 [branch]:
 https://help.github.com/articles/creating-and-deleting-branches-within-your-repository/

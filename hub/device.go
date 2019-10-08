@@ -13,7 +13,7 @@ import (
 // Lifetime of a session handler assignment, before device comes back and asks for a new handler
 const ticketExpirationMinutes = 60 * 24 * 3
 
-// Session state for a device, and when the state was last updated
+// DeviceState is a session state for a device, and when the state was last updated
 type DeviceState struct {
 
 	// Provisioning Info

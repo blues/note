@@ -5,13 +5,13 @@
 package main
 
 import (
-	"os"
-	"fmt"
-	"time"
-	"strings"
 	"encoding/json"
-	"github.com/blues/note/lib"
+	"fmt"
 	"github.com/blues/note-go/note"
+	"github.com/blues/note/lib"
+	"os"
+	"strings"
+	"time"
 )
 
 // Event log directory
@@ -27,8 +27,8 @@ func eventLogInit(dir string) {
 func notehubEvent(context interface{}, local bool, file *notelib.Notefile, event *note.Event) (err error) {
 
 	// Retrieve the session context
-    var session *notelib.HubSessionContext
-    session = context.(*notelib.HubSessionContext)
+	var session *notelib.HubSessionContext
+	session = context.(*notelib.HubSessionContext)
 
 	// If this is a queue and this is a template note, recursively expand it to multiple notifications
 	if event.Bulk {
@@ -59,9 +59,9 @@ func notehubEvent(context interface{}, local bool, file *notelib.Notefile, event
 	filename = strings.Replace(filename, "imei:", "", 1) + ".json"
 
 	// Append the JSON to the file
-	f, err := os.OpenFile(eventLogDirectory+"/"+filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644) 
+	f, err := os.OpenFile(eventLogDirectory+"/"+filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err == nil {
-		f.WriteString(eventNDJSON) 
+		f.WriteString(eventNDJSON)
 		f.Close()
 	}
 
