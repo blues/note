@@ -6,7 +6,6 @@
 *.dll
 *.so
 *.dylib
-hub/hub
 
 # env files
 *.env
@@ -18,11 +17,9 @@ hub/hub
 *.out
 
 # Go build outputs
-**/build
-
-# Packer generated manifest files
-packer-manifest.json
-packer-manifest.json.lock
+build
+hub/hub
+lib/lib
 
 # auto- generated files #
 ######################

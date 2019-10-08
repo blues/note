@@ -310,7 +310,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 	event.DeviceUID = nf.eventDeviceUID
 	event.DeviceSN = nf.eventDeviceSN
 	event.ProductUID = nf.eventProductUID
-	if (nf.eventAppUID != "") {
+	if nf.eventAppUID != "" {
 		app := note.EventApp{}
 		event.App = &app
 		event.App.AppUID = nf.eventAppUID
