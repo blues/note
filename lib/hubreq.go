@@ -165,30 +165,30 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 		session.Active = true
 
 		// Return info to the client about itself
-		if session.Session.Where.OLC != "" {
+		if session.Session.Tower.OLC != "" {
 
 			// Load the location to compute cell offset, if possible
 			shortZone := ""
 			offsetSecondsEastOfUTC := 0
-			location, err := time.LoadLocation(session.Session.Where.TimeZone)
+			location, err := time.LoadLocation(session.Session.Tower.TimeZone)
 			if err != nil {
-				fmt.Printf("*** Can't load location for: %s\n", session.Session.Where.TimeZone)
+				fmt.Printf("*** Can't load location for: %s\n", session.Session.Tower.TimeZone)
 			} else {
 				localTime := time.Now().In(location)
 				shortZone, offsetSecondsEastOfUTC = localTime.Zone()
 			}
 
 			// Return everything packed into the CellID field
-			rsp.CellID = session.Session.Where.OLC
-			rsp.CellID += "|" + session.Session.Where.CountryCode
-			rsp.CellID += "|" + session.Session.Where.TimeZone
+			rsp.CellID = session.Session.Tower.OLC
+			rsp.CellID += "|" + session.Session.Tower.CountryCode
+			rsp.CellID += "|" + session.Session.Tower.TimeZone
 			rsp.CellID += "|" + shortZone
 			if shortZone != "" {
 				rsp.CellID += "|" + fmt.Sprintf("%d", offsetSecondsEastOfUTC/60)
 			} else {
 				rsp.CellID += "|"
 			}
-			rsp.CellID += "|" + session.Session.Where.Name
+			rsp.CellID += "|" + session.Session.Tower.Name
 
 		}
 
