@@ -112,7 +112,7 @@ type HubSessionContext struct {
 	Latest           *map[string]note.Event
 	RouteInfo        map[string]interface{}
 	// Fields that are useful when logged in a session log
-	Session          note.DeviceSession
+	Session note.DeviceSession
 	// Cached Where info, used by event processing for efficiency
 	CachedWhereLat      float64
 	CachedWhereLon      float64
@@ -132,4 +132,3 @@ type HubSessionEvent struct {
 
 // HTTPUserAgent is the HTTP user agent for all our uses of HTTP
 const HTTPUserAgent = "notes"
-
