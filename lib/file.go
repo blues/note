@@ -10,8 +10,13 @@ import (
 	"strings"
 )
 
+// This is an important policy that defines how we handle filenames.  When true, "." is replaced with "-" and .json is appended,
+// but when false the filename is left as-is except for a bit of cleaning.
+const cleanWithJSONExtension = false
+
 // Default filename
 const defaultFileStorageName = "notefiles"
+const defaultFileStorageExt = ".db"
 
 // Root storage location
 var fsRootStorageLocation = "."
@@ -86,7 +91,11 @@ func fsCleanName(name string) string {
 		if (c >= "a" && c <= "z") || (c >= "0" && c <= "9") || (c == "_" || c == "-" || c == "/") {
 			clean = clean + c
 		} else {
-			clean = clean + "-"
+			if !cleanWithJSONExtension && c == "." {
+				clean = clean + c
+			} else {
+				clean = clean + "-"
+			}
 		}
 	}
 	if len(clean) == 0 {
@@ -116,7 +125,13 @@ func fsNamesFromFileStorageObject(storageObject string) (containerName string, f
 
 // Generate a clean filename with correct extension from a filename input
 func FileCleanName(filename string) string {
-	return fsCleanName(filename) + ".json"
+	if cleanWithJSONExtension {
+		return fsCleanName(filename) + ".json"
+	}
+	if filename == defaultFileStorageName {
+		return fsCleanName(filename+defaultFileStorageExt)
+	}
+	return fsCleanName(filename)
 }
 
 // Generate a filename given some hints that are used to 'weigh in' on the aesthetics
@@ -175,18 +190,24 @@ func fsCreate(storageHint string, filenameHint string) (storageObject string, er
 	// Find a path that doesn't yet exist
 	container, _ := fsNamesFromFileStorageObject(storageHint)
 	name := fsFilename(container, filenameHint)
-	for i := 1; ; i++ {
 
-		exists, err2 := fio.Exists(fsPath(name))
-		if err2 != nil {
-			err = err2
-			return
-		}
-		if !exists {
-			break
-		}
+	// If and only if we're cleaning, select a path that doesn't exist - else overwrite the file
+	if cleanWithJSONExtension {
 
-		name = fsFilename(container, fmt.Sprintf("%s%d", filenameHint, i))
+		for i := 1; ; i++ {
+
+			exists, err2 := fio.Exists(fsPath(name))
+			if err2 != nil {
+				err = err2
+				return
+			}
+			if !exists {
+				break
+			}
+
+			name = fsFilename(container, fmt.Sprintf("%s%d", filenameHint, i))
+
+		}
 
 	}
 
