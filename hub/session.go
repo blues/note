@@ -7,9 +7,9 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"github.com/blues/note/lib"
 	"github.com/google/uuid"
+	"net"
 )
 
 // Process requests for the duration of a session being open
