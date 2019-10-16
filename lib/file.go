@@ -114,6 +114,11 @@ func fsNamesFromFileStorageObject(storageObject string) (containerName string, f
 
 }
 
+// Generate a clean filename with correct extension from a filename input
+func FileCleanName(filename string) string {
+	return fsCleanName(filename) + ".json"
+}
+
 // Generate a filename given some hints that are used to 'weigh in' on the aesthetics
 func fsFilename(storageHint string, filenameHint string) string {
 
@@ -123,7 +128,7 @@ func fsFilename(storageHint string, filenameHint string) string {
 	}
 
 	// Generate the filename
-	cleanFilename := fsCleanName(filenameHint) + ".json"
+	cleanFilename := FileCleanName(filenameHint)
 
 	// If storage is specified (such as a Notebox), get the folder hint from storage.  Note
 	// that if it's the file system, we know that we need to clean it because of the colons, but
