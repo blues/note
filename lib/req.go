@@ -157,8 +157,10 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 					rsp.Err = fmt.Sprintf("error getting note: %s", err)
 				} else {
 					rsp.NoteID = req.NoteID
-					if xnote.Deleted {
+					isQueue, _, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
+					if !isQueue && xnote.Deleted {
 						rsp.Deleted = true
+						rsp.Err = fmt.Sprintf("note has been deleted: %s "+ErrNoteNoExist, req.NoteID)
 					}
 					if xnote.Body != nil {
 						rsp.Body = &xnote.Body

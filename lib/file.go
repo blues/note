@@ -123,7 +123,7 @@ func fsNamesFromFileStorageObject(storageObject string) (containerName string, f
 
 }
 
-// Generate a clean filename with correct extension from a filename input
+// FileCleanName generates a clean filename with correct extension from a filename input
 func FileCleanName(filename string) string {
 	if cleanWithJSONExtension {
 		return fsCleanName(filename) + ".json"
