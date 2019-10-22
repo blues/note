@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/blues/note-go/note"
 	"github.com/blues/note-go/notecard"
-	"strings"
 )
 
 // Request performs a local operation using the JSON API
@@ -17,14 +16,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	var err error
 	req := notecard.Request{}
 	rsp := notecard.Request{}
-
-	// Clean up the incoming JSON.  This is necessary because it is very frequent to have created
-	// the json from string literals that contain these characters which json.Unmarshal views as unparsable.
-	jstr := string(reqJSON)
-	jstr = strings.Replace(jstr, "\n", "", -1)
-	jstr = strings.Replace(jstr, "\r", "", -1)
-	jstr = strings.Replace(jstr, "\t", "", -1)
-	reqJSON = []byte(jstr)
 
 	// Debug
 	if debugRequest {
@@ -151,6 +142,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			if req.NoteID == "" {
 				rsp.Err = "no note ID specified"
 			} else {
+				// Get the note
 				var xnote note.Note
 				xnote, err = box.GetNote(req.NotefileID, req.NoteID)
 				if err != nil {
@@ -196,6 +188,9 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 				rsp.Err = fmt.Sprintf("cannot use this reserved tracker name: %s", req.TrackerID)
 				break
 			}
+
+			// Update the environment vars for the notebox, which may result in a changed _env.dbs
+			hubUpdateEnvVars(box)
 
 			// Get the changed notefiles for that tracker
 			notefiles, err = box.GetChangedNotefiles(req.TrackerID)

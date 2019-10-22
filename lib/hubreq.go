@@ -19,12 +19,18 @@ var serverSupportsTLS bool
 
 // NoteboxInitFunc is the func to initialize the notebox at the start of a session
 type NoteboxInitFunc func(box *Notebox) (err error)
+var fnNoteboxUpdateEnv NoteboxInitFunc
 
-var fnNoteboxInit NoteboxInitFunc
-
-// HubSetNoteboxInit sets the global notebox init function
+// HubSetNoteboxInit sets the global notebox function to update env vars
 func HubSetNoteboxInit(fn NoteboxInitFunc) {
-	fnNoteboxInit = fn
+	fnNoteboxUpdateEnv = fn
+}
+
+// Update the environment variables for an open notebox
+func hubUpdateEnvVars(box *Notebox) {
+	if fnNoteboxUpdateEnv != nil {
+		fnNoteboxUpdateEnv(box)
+	}
 }
 
 // GetNotificationFunc retrieves hub notifications to be sent to client
@@ -310,11 +316,6 @@ func openHubNoteboxForDevice(session *HubSessionContext, deviceUID string, devic
 
 	// Set the default notification context for files opened within this box instance
 	box.SetEventInfo(deviceUID, deviceSN, productUID, appUID, event, context)
-
-	// If this is the first transaction on a session, update the hub info
-	if !session.Active && fnNoteboxInit != nil {
-		fnNoteboxInit(box)
-	}
 
 	// Done
 	return
@@ -771,6 +772,9 @@ func hubNoteboxSummary(session *HubSessionContext, req notehubMessage, rsp *note
 		box.ClearAllTrackers(req.DeviceEndpointID)
 		rsp.SessionIDMismatch = true
 	}
+
+	// Update the environment vars for the notebox, which may result in a changed _env.dbs
+	hubUpdateEnvVars(box)
 
 	// Get the info
 	fileChanges, err4 := box.GetChangedNotefiles(req.DeviceEndpointID)
