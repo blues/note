@@ -437,6 +437,12 @@ func (nf *Notefile) AddNote(endpointID string, noteID string, xnote note.Note) (
 		noteID = nf.NewNoteID(endpointID)
 	}
 
+	// If the note exists as a deleted note, turn it into an update
+	onote, present := nf.Notes[noteID]
+	if !nf.Queue && present && onote.Deleted {
+		return nf.UpdateNote(endpointID, noteID, xnote)
+	}
+
 	// Lock for writing
 	nfLock.Lock()
 
