@@ -79,3 +79,6 @@ const ErrHubNoHandler = "{no-handler}"
 
 // ErrIdle (golint)
 const ErrIdle = "{idle}"
+
+// ErrDeviceNotFound (golint)
+const ErrDeviceNotFound = "{device-noexist}"

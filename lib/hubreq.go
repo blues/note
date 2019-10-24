@@ -148,6 +148,7 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 			req.UsageSentNotes = session.Session.This.SentNotes
 			req.CellID = session.Session.CellID
 			req.NotificationSession = session.Notification
+			req.Development = session.Session.Development
 		}
 
 		// If there is a null session ticket, the only request that's permitted is a Discover request.

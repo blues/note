@@ -240,7 +240,7 @@ func OpenNotebox(localEndpointID string, boxLocalStorage string) (notebox *Noteb
 	notefile, err := storage.readNotefile(boxLocalStorage, boxLocalStorage)
 	if err != nil {
 		boxLock.Unlock()
-		return nil, err
+		return nil, fmt.Errorf("device not found " + ErrDeviceNotFound)
 	}
 
 	// For the notebox itself, create a new notefile data structure with a single refcnt
@@ -669,7 +669,6 @@ func (box *Notebox) NotefileExists(notefileID string) (present bool) {
 	nfLock.Lock()
 	boxopenfile, _ := box.openfiles[box.storage]
 	_, present = boxopenfile.notefile.Notes[compositeNoteID(box.endpointID, notefileID)]
-	fmt.Printf("OZZIE present:%t endpoint:%s notefile:%s\n", present, box.endpointID, notefileID)
 	nfLock.Unlock()
 	boxLock.Unlock()
 	return

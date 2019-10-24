@@ -20,6 +20,7 @@ type DeviceState struct {
 	DeviceUID  string `json:"device,omitempty"`
 	ProductUID string `json:"product,omitempty"`
 	AppUID     string `json:"app,omitempty"`
+	DeviceSN   string `json:"sn,omitempty"`
 	DeviceDN   string `json:"dn,omitempty"`
 
 	// Session State
@@ -48,7 +49,7 @@ func deviceCacheLoad(deviceUID string) (device DeviceState, present bool, err er
 }
 
 // Look up a device, provisioning it if necessary
-func deviceGetOrProvision(deviceUID string, productUID string) (device DeviceState, err error) {
+func deviceGetOrProvision(deviceUID string, deviceSN string, productUID string) (device DeviceState, err error) {
 
 	// Load the device
 	device, present, err2 := deviceCacheLoad(deviceUID)
@@ -63,6 +64,7 @@ func deviceGetOrProvision(deviceUID string, productUID string) (device DeviceSta
 		// Provision the device
 		device.DeviceUID = deviceUID
 		device.ProductUID = productUID
+		device.DeviceSN = deviceSN
 
 	}
 

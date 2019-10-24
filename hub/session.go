@@ -53,7 +53,7 @@ func sessionHandler(connSession net.Conn, secure bool) {
 			}
 
 			// Make sure that this device is provisioned
-			device, err2 := deviceGetOrProvision(sessionContext.DeviceUID, sessionContext.ProductUID)
+			device, err2 := deviceGetOrProvision(sessionContext.DeviceUID, sessionContext.DeviceSN, sessionContext.ProductUID)
 			if err2 != nil {
 				fmt.Printf("session: can't get or provision device: %s\n", err2)
 				break
