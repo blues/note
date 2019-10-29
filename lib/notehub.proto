@@ -44,5 +44,6 @@ message NotehubPB {
     optional bool NotificationSession = 34;
     optional int32 Voltage100 = 35;
     optional int32 Temp100 = 36;
+    optional bool Development = 37;
 }
 

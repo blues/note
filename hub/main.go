@@ -18,6 +18,8 @@ import (
 var serverAddress string
 var serverPortTCP string
 var serverPortTCPS string
+var serverPortHTTP string
+var serverHTTPReqTopic string
 
 // Main service entry point
 func main() {
@@ -36,6 +38,8 @@ func main() {
 		return
 	}
 	serverAddress = string(bytes.TrimSpace(buf))
+	serverHTTPReqTopic := "/req"
+	serverPortHTTP := ":8000"
 	serverPortTCP = ":8001"
 	serverPortTCPS = ":8002"
 
@@ -49,9 +53,14 @@ func main() {
 	// Spawn the TCP listeners
 	go tcpHandler()
 	go tcpsHandler()
-	fmt.Printf("\nON DEVICE, CONNECT TO THIS SERVER USING:\n{\"req\":\"service.set\",\"host\":\"tcp:%s%s|tcps:%s%s\"}\n",
+	fmt.Printf("\nON DEVICE, SET HOST USING:\n'{\"req\":\"service.set\",\"host\":\"tcp:%s%s|tcps:%s%s\"}'\n\n",
 		serverAddress, serverPortTCP, serverAddress, serverPortTCPS)
-	fmt.Printf("TO RESTORE DEVICE'S HUB CONFIGURATION, USE:\n{\"req\":\"service.set\",\"host\":\"-\"}\n\n")
+	fmt.Printf("TO RESTORE DEVICE'S HUB CONFIGURATION, USE:\n'{\"req\":\"service.set\",\"host\":\"-\"}'\n\n")
+
+	// Spawn HTTP for inbound web requests
+	http.HandleFunc(serverHTTPReqTopic, httpReqHandler)
+	http.HandleFunc(serverHTTPReqTopic+"/", httpReqHandler)
+	go http.ListenAndServe(serverPortHTTP, nil)
 
 	// Wait forever
 	for {

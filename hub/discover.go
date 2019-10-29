@@ -19,7 +19,7 @@ func NotehubDiscover(deviceUID string, deviceSN string, productUID string, hostn
 
 	// Return info about a specific device if requested
 	if deviceUID != "" {
-		device, err2 := deviceGetOrProvision(deviceUID, productUID)
+		device, err2 := deviceGetOrProvision(deviceUID, deviceSN, productUID)
 		if err2 != nil {
 			err = err2
 			return

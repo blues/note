@@ -47,33 +47,67 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	case notecard.ReqFilesAdd:
 		if req.FileInfo == nil || len(*req.FileInfo) == 0 {
 			rsp.Err = "no notefiles were specified"
-		} else {
-			for notefileID, notefileInfo := range *req.FileInfo {
-				err = box.AddNotefile(notefileID, &notefileInfo)
-				if err != nil && rsp.Err == "" {
-					rsp.Err = fmt.Sprintf("error adding notefile: %s", err)
-				}
+			break
+		}
+		for notefileID, notefileInfo := range *req.FileInfo {
+			err = box.AddNotefile(notefileID, &notefileInfo)
+			if err != nil && rsp.Err == "" {
+				rsp.Err = fmt.Sprintf("error adding notefile: %s", err)
 			}
 		}
 
 	case notecard.ReqFilesDelete:
 		if req.Files == nil || len(*req.Files) == 0 {
 			rsp.Err = "no notefiles were specified"
-		} else {
-			deleteFiles := *req.Files
-			for i := range deleteFiles {
-				err = box.DeleteNotefile(deleteFiles[i])
-				if err != nil && rsp.Err == "" {
-					rsp.Err = fmt.Sprintf("error deleting %s: %s", deleteFiles[i], err)
-				}
+			break
+		}
+		deleteFiles := *req.Files
+		for i := range deleteFiles {
+			err = box.DeleteNotefile(deleteFiles[i])
+			if err != nil && rsp.Err == "" {
+				rsp.Err = fmt.Sprintf("error deleting %s: %s", deleteFiles[i], err)
 			}
 		}
 
 	case notecard.ReqNoteAdd:
 		if req.NotefileID == "" {
 			rsp.Err = "no notefile specified"
-		} else {
-			xnote := note.Note{}
+			break
+		}
+		// Make sure that the file exists
+		if !box.NotefileExists(req.NotefileID) {
+			err = box.AddNotefile(req.NotefileID, nil)
+			if err != nil {
+				rsp.Err = fmt.Sprintf("%s", err)
+				break
+			}
+		}
+		// Add the note
+		xnote := note.Note{}
+		if req.Payload != nil {
+			xnote.Payload = *req.Payload
+		}
+		if req.Body != nil {
+			xnote.Body = *req.Body
+		}
+		err = box.AddNote(endpointID, req.NotefileID, req.NoteID, xnote)
+		if err != nil {
+			rsp.Err = fmt.Sprintf("%s", err)
+			break
+		}
+
+	case notecard.ReqNoteUpdate:
+		if req.NotefileID == "" {
+			rsp.Err = "no notefile specified"
+			break
+		}
+		if req.NoteID == "" {
+			rsp.Err = "no note ID specified"
+			break
+		}
+		var xnote note.Note
+		xnote, err = box.GetNote(req.NotefileID, req.NoteID)
+		if err != nil {
 			if req.Payload != nil {
 				xnote.Payload = *req.Payload
 			}
@@ -83,42 +117,20 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			err = box.AddNote(endpointID, req.NotefileID, req.NoteID, xnote)
 			if err != nil {
 				rsp.Err = fmt.Sprintf("error adding note: %s", err)
+				break
 			}
+			break
 		}
-
-	case notecard.ReqNoteUpdate:
-		if req.NotefileID == "" {
-			rsp.Err = "no notefile specified"
-		} else {
-			if req.NoteID == "" {
-				rsp.Err = "no note ID specified"
-			} else {
-				var xnote note.Note
-				xnote, err = box.GetNote(req.NotefileID, req.NoteID)
-				if err != nil {
-					if req.Payload != nil {
-						xnote.Payload = *req.Payload
-					}
-					if req.Body != nil {
-						xnote.Body = *req.Body
-					}
-					err = box.AddNote(endpointID, req.NotefileID, req.NoteID, xnote)
-					if err != nil {
-						rsp.Err = fmt.Sprintf("error adding note: %s", err)
-					}
-				} else {
-					if req.Payload != nil {
-						xnote.Payload = *req.Payload
-					}
-					if req.Body != nil {
-						xnote.Body = *req.Body
-					}
-					err = box.UpdateNote(endpointID, req.NotefileID, req.NoteID, xnote)
-					if err != nil {
-						rsp.Err = fmt.Sprintf("error updating note: %s", err)
-					}
-				}
-			}
+		if req.Payload != nil {
+			xnote.Payload = *req.Payload
+		}
+		if req.Body != nil {
+			xnote.Body = *req.Body
+		}
+		err = box.UpdateNote(endpointID, req.NotefileID, req.NoteID, xnote)
+		if err != nil {
+			rsp.Err = fmt.Sprintf("error updating note: %s", err)
+			break
 		}
 
 	case notecard.ReqNoteDelete:
