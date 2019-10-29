@@ -663,6 +663,18 @@ func NotefileAttributesFromID(notefileID string) (isQueue bool, syncToHub bool, 
 	return
 }
 
+// NotefileExists returns true if notefile exists
+func (box *Notebox) NotefileExists(notefileID string) (present bool) {
+	boxLock.Lock()
+	nfLock.Lock()
+	boxopenfile, _ := box.openfiles[box.storage]
+	_, present = boxopenfile.notefile.Notes[compositeNoteID(box.endpointID, notefileID)]
+	fmt.Printf("OZZIE present:%t endpoint:%s notefile:%s\n", present, box.endpointID, notefileID)
+	nfLock.Unlock()
+	boxLock.Unlock()
+	return
+}
+
 // AddNotefile adds a new notefile to the notebox, and return "nil" if it already exists
 func (box *Notebox) AddNotefile(notefileID string, notefileInfo *note.NotefileInfo) error {
 
