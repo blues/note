@@ -784,8 +784,18 @@ func hubNoteboxSummary(session *HubSessionContext, req notehubMessage, rsp *note
 		return
 	}
 
-	// Return the results
-	rsp.NotefileIDs = strings.Join(fileChanges, ReservedIDDelimiter)
+	// Return the results so long as they fit within the protocol buffer (see notehub.options).
+	// This is safe because it will simply take multiple passes to sync all of these files.
+	for {
+		rsp.NotefileIDs = strings.Join(fileChanges, ReservedIDDelimiter)
+		if len(rsp.NotefileIDs) < (250-10) {
+			break
+		}
+		if len(fileChanges) == 0 {
+			break
+		}
+		fileChanges = fileChanges[:len(fileChanges)-1]
+	}
 
 	// Done
 	box.Close()
