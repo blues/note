@@ -39,9 +39,9 @@ func main() {
 	}
 	serverAddress = string(bytes.TrimSpace(buf))
 	serverHTTPReqTopic := "/req"
-	serverPortHTTP := ":8000"
-	serverPortTCP = ":8001"
-	serverPortTCPS = ":8002"
+	serverPortHTTP := ":80"
+	serverPortTCP = ":8081"
+	serverPortTCPS = ":8086"
 
 	// Initialize file system folders
 	eventLogInit(os.Getenv("HOME") + "/note/events")
