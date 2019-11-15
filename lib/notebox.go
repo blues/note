@@ -297,6 +297,11 @@ func autoPurge() {
 	}
 }
 
+// Checkpoint all noteboxes and purge closed noteboxes
+func Checkpoint() (err error) {
+	return checkpointAllNoteboxes(true)
+}
+
 // checkpointAllNoteboxes ensures that what's on-disk is up to date
 func checkpointAllNoteboxes(purge bool) error {
 
