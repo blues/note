@@ -5,8 +5,9 @@
 package notelib
 
 import (
-	"encoding/json"
 	"fmt"
+	"strings"
+	"encoding/json"
 	"github.com/blues/note-go/note"
 	"github.com/blues/note-go/notecard"
 )
@@ -36,15 +37,19 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	// Extract the request ID, which will be used to correlate requests with responses
 	rsp.RequestID = req.RequestID
 
+    // Handle legacy which used "files." instead of "file.".  This was changed 2019-11-18 and
+	// can be removed after we ship because the compat was just until we distributed new notecard fw.
+	req.Req = strings.Replace(req.Req, "files.", "file.", -1)
+	
 	// Dispatch based on request type
 	switch req.Req {
 
 	default:
 		rsp.Err = fmt.Sprintf("unknown request type: %s", req.Req)
 
-	case notecard.ReqFilesSet:
+	case notecard.ReqFileSet:
 		fallthrough
-	case notecard.ReqFilesAdd:
+	case notecard.ReqFileAdd:
 		if req.FileInfo == nil || len(*req.FileInfo) == 0 {
 			rsp.Err = "no notefiles were specified"
 			break
@@ -56,7 +61,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			}
 		}
 
-	case notecard.ReqFilesDelete:
+	case notecard.ReqFileDelete:
 		if req.Files == nil || len(*req.Files) == 0 {
 			rsp.Err = "no notefiles were specified"
 			break
@@ -177,7 +182,9 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			}
 		}
 
-	case notecard.ReqFilesGet:
+	case notecard.ReqFileGetL:
+		fallthrough
+	case notecard.ReqFileChanges:
 		var notefiles []string
 		changes := 0
 
@@ -266,7 +273,9 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			rsp.Changes = int32(changes)
 		}
 
-	case notecard.ReqNotesGet:
+	case notecard.ReqNotesGetL:
+		fallthrough
+	case notecard.ReqNoteChanges:
 
 		// Make sure that a tracker name is specified
 		if req.TrackerID == "" {
