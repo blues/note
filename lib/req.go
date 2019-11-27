@@ -5,11 +5,11 @@
 package notelib
 
 import (
-	"fmt"
-	"strings"
 	"encoding/json"
+	"fmt"
 	"github.com/blues/note-go/note"
 	"github.com/blues/note-go/notecard"
+	"strings"
 )
 
 // Request performs a local operation using the JSON API
@@ -37,10 +37,10 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	// Extract the request ID, which will be used to correlate requests with responses
 	rsp.RequestID = req.RequestID
 
-    // Handle legacy which used "files." instead of "file.".  This was changed 2019-11-18 and
+	// Handle legacy which used "files." instead of "file.".  This was changed 2019-11-18 and
 	// can be removed after we ship because the compat was just until we distributed new notecard fw.
 	req.Req = strings.Replace(req.Req, "files.", "file.", -1)
-	
+
 	// Dispatch based on request type
 	switch req.Req {
 

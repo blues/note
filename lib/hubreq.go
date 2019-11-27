@@ -19,6 +19,7 @@ var serverSupportsTLS bool
 
 // NoteboxInitFunc is the func to initialize the notebox at the start of a session
 type NoteboxInitFunc func(box *Notebox) (err error)
+
 var fnNoteboxUpdateEnv NoteboxInitFunc
 
 // HubSetNoteboxInit sets the global notebox function to update env vars
@@ -788,7 +789,7 @@ func hubNoteboxSummary(session *HubSessionContext, req notehubMessage, rsp *note
 	// This is safe because it will simply take multiple passes to sync all of these files.
 	for {
 		rsp.NotefileIDs = strings.Join(fileChanges, ReservedIDDelimiter)
-		if len(rsp.NotefileIDs) < (250-10) {
+		if len(rsp.NotefileIDs) < (250 - 10) {
 			break
 		}
 		if len(fileChanges) == 0 {

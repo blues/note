@@ -129,7 +129,7 @@ func FileCleanName(filename string) string {
 		return fsCleanName(filename) + ".json"
 	}
 	if filename == defaultFileStorageName {
-		return fsCleanName(filename+defaultFileStorageExt)
+		return fsCleanName(filename + defaultFileStorageExt)
 	}
 	return fsCleanName(filename)
 }
