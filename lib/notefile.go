@@ -891,6 +891,7 @@ func changeShouldBeIgnored(note *note.Note, endpointID string) bool {
 	}
 
 	// This is a change that should be ignored because it originated at that endpoint
+	fmt.Printf("OZZIE IGNORE CHANGE FOR ep:'%s'\n", endpointID)
 	return true
 
 }
@@ -919,6 +920,9 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 	until = nf.Change
 	fullSearch = true
 
+	fmt.Printf("OZZIE ep:'%s' file:'%s' since:%d full:%t\n", endpointID, nf.notefileID, since, fullSearch)
+	debugGetChanges = true // OZZIE
+	
 	// The special endpointID of "ReservedIDDelimiter" means that we do not want to use a tracker.  This
 	// feature is internally-used only, and is implemented so that we can get all changed notes without
 	// generating a modification to the file that would result if we updated and deleted a temp tracker.
@@ -931,6 +935,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 			if tracker.Change > 1 {
 				fullSearch = false
 			}
+			fmt.Printf("OZZIE exists tracker.chg:%d full:%t\n", tracker.Change, fullSearch)
 
 		} else {
 
@@ -939,6 +944,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 			tracker.Change = since
 			nf.Trackers[endpointID] = tracker
 			nf.modCount++
+			fmt.Printf("OZZIE new tracker.chg:%d full:%t\n", tracker.Change, fullSearch)
 
 		}
 		since = tracker.Change
@@ -952,7 +958,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 
 	// Debug
 	if debugGetChanges {
-		debugf("GetChanges %s ep:'%s' nf.Change:%d since:%d batch:%d\n", nf.notefileID, endpointID, nf.Change, since, maxBatchSize)
+		debugf("GetChanges %s ep:'%s' nf.Change:%d since:%d batch:%d full:%t\n", nf.notefileID, endpointID, nf.Change, since, maxBatchSize, fullSearch)
 	}
 
 	// Do a pass to compute the since/until that will give us the correct range for the batch.
@@ -993,6 +999,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 	if debugGetChanges {
 		debugf("GetChanges until computed to be %d\n", until)
 	}
+	fmt.Printf("OZZIE since:%d until:%d\n", since, until)
 
 	// If we're just counting, exit
 	if countOnly {
