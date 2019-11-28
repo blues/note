@@ -37,14 +37,20 @@ type Notefile struct {
 	Change          int64                `json:"C,omitempty"`
 }
 
-// Tracker is the structure maintained on a per-endpoint basis
+// Tracker is the structure maintained on a per-endpoint basis. When created, the Active flag being false
+// indicates that any GetChanges will return ALL notes in the file. Only after the tracking entity
+// has received all notes at least once can it then switch into "Optimize" mode. When Optimizing, a tracking
+// entity will not receive its own uploaded changes - thus preventing "loopback". (Loopback is not
+// harmful per se, but it is suboptimal from a bandwidth perspective.)
 type Tracker struct {
 	Change    int64 `json:"c,omitempty"`
 	SessionID int64 `json:"i,omitempty"`
+	Optimize  bool	`json:"o,omitempty"`
 }
 
 // defaultMaxGetChangesBatchSize is the default for the max of changes that we'll return in a batch of GetChanges.
-const defaultMaxGetChangesBatchSize = 10
+//const defaultMaxGetChangesBatchSize = 15
+const defaultMaxGetChangesBatchSize = 5		// OZZIE
 
 // inboundQueuesProcessedByNotifier defines whether or not the local behavior
 // is that queues are processed by the notifier, or if they
@@ -891,16 +897,20 @@ func changeShouldBeIgnored(note *note.Note, endpointID string) bool {
 	}
 
 	// This is a change that should be ignored because it originated at that endpoint
-	fmt.Printf("OZZIE IGNORE CHANGE FOR ep:'%s'\n", endpointID)
 	return true
 
 }
 
 // GetChanges retrieves the next batch of changes being tracked, initializing a new tracker if necessary.
 func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Notefile, numChanges int, totalChanges int, since int64, until int64, err error) {
-	fullSearch := false
 	debugGetChanges := false
+	debugGetChanges = true // OZZIE
 	newNotefile := CreateNotefile(false)
+
+	// The special endpointID of "ReservedIDDelimiter" means that we do not want to use a tracker.  This
+	// feature is internally-used only, and is implemented so that we can get all changed notes without
+	// generating a modification to the file that would result if we updated and deleted a temp tracker.
+	usingTracker :=  endpointID != ReservedIDDelimiter
 
 	// There is a special form, only used internally and not exposed at the API, wherein if maxBatchSize
 	// is -1 it is an instruction NOT to generate any output but instead just to count.
@@ -918,35 +928,40 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 	// Init return values to include the entire range of notes in the notefile
 	since = 1
 	until = nf.Change
-	fullSearch = true
 
-	fmt.Printf("OZZIE ep:'%s' file:'%s' since:%d full:%t\n", endpointID, nf.notefileID, since, fullSearch)
-	debugGetChanges = true // OZZIE
-	
-	// The special endpointID of "ReservedIDDelimiter" means that we do not want to use a tracker.  This
-	// feature is internally-used only, and is implemented so that we can get all changed notes without
-	// generating a modification to the file that would result if we updated and deleted a temp tracker.
-	if endpointID != ReservedIDDelimiter {
+	// The "optimize" flag indicates whether we have gone through at least one full pass of returning
+	// changes to a caller.  Until doing one full pass, we cannot be optimal.
+	optimize := false
+
+	// Initialize a new tracker on first use
+	if usingTracker {
 
 		// Bring 'since' up to the minimum change required for this tracker
 		tracker, present := nf.Trackers[endpointID]
 		if present {
 
-			if tracker.Change > 1 {
-				fullSearch = false
+			// Anytime  we are searching from the beginning, start without optimization
+			if tracker.Change <= 1 && tracker.Optimize {
+				tracker.Optimize = false
+				nf.Trackers[endpointID] = tracker
+				nf.modCount++
 			}
-			fmt.Printf("OZZIE exists tracker.chg:%d full:%t\n", tracker.Change, fullSearch)
+			
+			// Remember whether or not we are optimizing
+			optimize = tracker.Optimize
 
 		} else {
-
-			// Set the sequence number to 0, so we pick up everything from the beginning
+			
+			// Set the sequence number to 1, so we pick up everything from the beginning
 			tracker = Tracker{}
-			tracker.Change = since
+			tracker.Change = 1
+			tracker.Optimize = false
 			nf.Trackers[endpointID] = tracker
 			nf.modCount++
-			fmt.Printf("OZZIE new tracker.chg:%d full:%t\n", tracker.Change, fullSearch)
 
 		}
+
+		// The first change sequence number to be returned, inclusive of this number
 		since = tracker.Change
 
 	}
@@ -958,7 +973,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 
 	// Debug
 	if debugGetChanges {
-		debugf("GetChanges %s ep:'%s' nf.Change:%d since:%d batch:%d full:%t\n", nf.notefileID, endpointID, nf.Change, since, maxBatchSize, fullSearch)
+		debugf("GetChanges %s ep:'%s' nf.Change:%d since:%d batch:%d optimize:%t\n", nf.notefileID, endpointID, nf.Change, since, maxBatchSize, optimize)
 	}
 
 	// Do a pass to compute the since/until that will give us the correct range for the batch.
@@ -969,7 +984,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 	array := make([]int64, maxBatchSize+1)
 	for noteID, note := range nf.Notes {
 		if note.Change >= since {
-			if !fullSearch && changeShouldBeIgnored(&note, endpointID) {
+			if optimize && changeShouldBeIgnored(&note, endpointID) {
 				if debugGetChanges {
 					debugf("GetChanges ignoring noteID:%s note.Change:%d\n%v\n", noteID, note.Change, note)
 				}
@@ -999,7 +1014,6 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 	if debugGetChanges {
 		debugf("GetChanges until computed to be %d\n", until)
 	}
-	fmt.Printf("OZZIE since:%d until:%d\n", since, until)
 
 	// If we're just counting, exit
 	if countOnly {
@@ -1017,7 +1031,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 		if note.Change >= until {
 			continue
 		}
-		if !fullSearch && changeShouldBeIgnored(&note, endpointID) {
+		if optimize && changeShouldBeIgnored(&note, endpointID) {
 			if debugGetChanges {
 				debugf("GetChanges again skipping noteID:%s note.Change:%d\n%v\n", noteID, note.Change, note)
 			}
@@ -1040,6 +1054,21 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 		debugf("GetChanges done numChanges:%d\n", numChanges)
 	}
 
+	// If the number of changes returned is 0, it means that future searches for this endpoint
+	// can be optimized so that we don't "loopback" changes from that endpoint.  (Note that the
+	// tracker "present" check below is just defensive coding.)
+	if usingTracker && numChanges == 0 {
+		tracker, present := nf.Trackers[endpointID]
+		if present && !tracker.Optimize {
+			tracker.Optimize = true
+			nf.Trackers[endpointID] = tracker
+			nf.modCount++
+			if debugGetChanges {
+				debugf("GetChanges optimization enabled for future calls\n")
+			}
+		}
+	}
+	
 	// Done
 	nfLock.Unlock()
 	return newNotefile, numChanges, totalChanges, since, until, nil
