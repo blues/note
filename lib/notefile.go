@@ -45,12 +45,11 @@ type Notefile struct {
 type Tracker struct {
 	Change    int64 `json:"c,omitempty"`
 	SessionID int64 `json:"i,omitempty"`
-	Optimize  bool	`json:"o,omitempty"`
+	Optimize  bool  `json:"o,omitempty"`
 }
 
 // defaultMaxGetChangesBatchSize is the default for the max of changes that we'll return in a batch of GetChanges.
-//const defaultMaxGetChangesBatchSize = 15
-const defaultMaxGetChangesBatchSize = 5		// OZZIE
+const defaultMaxGetChangesBatchSize = 25
 
 // inboundQueuesProcessedByNotifier defines whether or not the local behavior
 // is that queues are processed by the notifier, or if they
@@ -68,7 +67,7 @@ var nfLock sync.RWMutex
 // Tests to see if a note is deleted, but NOT a "sent pre-deleted" note, knowing
 // that we pre-delete notes that are sent.
 func isFullTombstone(note note.Note) bool {
-	return (note.Deleted && !note.Sent)
+	return note.Deleted && !note.Sent
 }
 
 // CreateNotefile instantiates and initializes a new Notefile, and prepares it so that
@@ -904,13 +903,12 @@ func changeShouldBeIgnored(note *note.Note, endpointID string) bool {
 // GetChanges retrieves the next batch of changes being tracked, initializing a new tracker if necessary.
 func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Notefile, numChanges int, totalChanges int, since int64, until int64, err error) {
 	debugGetChanges := false
-	debugGetChanges = true // OZZIE
 	newNotefile := CreateNotefile(false)
 
 	// The special endpointID of "ReservedIDDelimiter" means that we do not want to use a tracker.  This
 	// feature is internally-used only, and is implemented so that we can get all changed notes without
 	// generating a modification to the file that would result if we updated and deleted a temp tracker.
-	usingTracker :=  endpointID != ReservedIDDelimiter
+	usingTracker := endpointID != ReservedIDDelimiter
 
 	// There is a special form, only used internally and not exposed at the API, wherein if maxBatchSize
 	// is -1 it is an instruction NOT to generate any output but instead just to count.
@@ -946,12 +944,12 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 				nf.Trackers[endpointID] = tracker
 				nf.modCount++
 			}
-			
+
 			// Remember whether or not we are optimizing
 			optimize = tracker.Optimize
 
 		} else {
-			
+
 			// Set the sequence number to 1, so we pick up everything from the beginning
 			tracker = Tracker{}
 			tracker.Change = 1
@@ -1068,7 +1066,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 			}
 		}
 	}
-	
+
 	// Done
 	nfLock.Unlock()
 	return newNotefile, numChanges, totalChanges, since, until, nil
