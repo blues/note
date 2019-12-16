@@ -25,7 +25,7 @@ var serverHTTPReqTopic string
 func main() {
 
 	// Get our server address and ports
-	rsp, err := http.Get("http://checkip.amazonaws.com")
+	rsp, err := http.Get("https://checkip.amazonaws.com")
 	if err != nil {
 		fmt.Printf("can't get our own IP address: %s", err)
 		return
