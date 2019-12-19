@@ -1,5 +1,7 @@
 github.com/blues/note-go v1.1.12 h1:eF09enV2qddCQtCoA+iuPcVipexEbxdeGP2rCrsSceo=
 github.com/blues/note-go v1.1.12/go.mod h1:UmdwX4L6hze+9K7lmS2JfER0yfp86iRpJwIHVTQoLiI=
+github.com/blues/note-go v1.1.15 h1:Xj80uo0Mde+u/hOeVRonAA9IBC8dO/FPHRvH5ttv8qc=
+github.com/blues/note-go v1.1.15/go.mod h1:UmdwX4L6hze+9K7lmS2JfER0yfp86iRpJwIHVTQoLiI=
 github.com/blues/serial v1.0.0 h1:5e+lEAHetgivBgBoVzpYypDK/eSskjWL8fG0JChRu/o=
 github.com/blues/serial v1.0.0/go.mod h1:soVC10e7izB7QFxbCPRWim12eVNmoyrTCgIFeKcL0ss=
 github.com/golang/protobuf v1.3.2 h1:6nsPYzhq5kReh6QImI3k5qWzO4PEbvbIW2cwSfR/6xs=
