@@ -218,6 +218,36 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 	return
 }
 
+// HubErrorResponse creates an error response message to be sent to the client device, and
+// terminates the session so that no further requests can be processed.
+func HubErrorResponse(session *HubSessionContext, errorMessage string) (result []byte) {
+	var rsp notehubMessage
+
+	// Put the session into a terminated state because of the error
+	session.Terminated = true
+
+	// Create a response message
+	rsp.Version = currentProtocolVersion
+	rsp.Error = errorMessage
+
+	// Convert to on-wire format
+	response, wirelen, err := msgToWire(rsp)
+	if err != nil {
+		return
+	}
+	result = response
+
+	// Display the result
+	if debugHubRequest {
+		JSON, _ := json.Marshal(rsp)
+		debugf("Response (%db json, %db wire)\n%s\n", len(JSON), wirelen, JSON)
+	}
+
+	// Done
+	return
+
+}
+
 // processRequest processes a request message
 func processRequest(session *HubSessionContext, req notehubMessage, event EventFunc, context interface{}) (response notehubMessage) {
 	var err error
