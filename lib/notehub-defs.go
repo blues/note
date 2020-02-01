@@ -99,6 +99,7 @@ type notehubMessage struct {
 type HubSessionContext struct {
 	Active           bool
 	Secure           bool
+	Terminated       bool
 	Discovery        bool
 	Notification     bool
 	DeviceUID        string
