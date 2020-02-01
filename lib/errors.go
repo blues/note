@@ -82,3 +82,7 @@ const ErrIdle = "{idle}"
 
 // ErrDeviceNotFound (golint)
 const ErrDeviceNotFound = "{device-noexist}"
+
+// ErrProductNotFound (golint)
+const ErrProductNotFound = "{product-noexist}"
+
