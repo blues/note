@@ -102,6 +102,7 @@ type HubSessionContext struct {
 	Terminated       bool
 	Discovery        bool
 	Notification     bool
+	BeganSec		 int
 	DeviceUID        string
 	DeviceSN         string
 	ProductUID       string
