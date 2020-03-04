@@ -1,4 +1,4 @@
-# Note
+# NOTEHUB <sup>TM</sup>
 
 The Blues toolset for manipulating notes and the the basics for creating a hub
 server.
