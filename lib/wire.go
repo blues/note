@@ -853,6 +853,77 @@ func wireReadHeader(version byte, header []byte) (isValid bool, protobufLength i
 
 }
 
+// u32min returns the smaller of x or y.
+func u32min(x, y uint32) uint32 {
+	if x > y {
+		return y
+	}
+	return x
+}
+
+// WireBarsFromSession extracts device's perception of the number of bars of signal from a session
+func WireBarsFromSession(session *HubSessionContext) (rat string, bars uint32) {
+
+	// Return the rat for the session
+	rat = session.Session.Rat
+
+	// Start by assuming great coverage
+	bars = 4
+
+	// Handle GSM OR handle LTE at the state when RSRQ can't be computed
+	if session.Session.Rsrq == 0 {
+		if session.Session.Rssi < -70 {
+			bars = 3
+		}
+		if session.Session.Rssi < -85 {
+			bars = 2
+		}
+		if session.Session.Rssi < -100 {
+			bars = 1
+		}
+		return
+	}
+
+	// RSRP is an integer indicating the reference signal received power in dBm
+	if session.Session.Rsrp < -80 {
+		bars = u32min(bars, 3)
+	}
+	if session.Session.Rsrp < -90 {
+		bars = u32min(bars, 2)
+	}
+	if session.Session.Rsrp < -100 {
+		bars = u32min(bars, 1)
+	}
+	// SINR is an integer indicating the signal to interference plus noise ratio.
+	// The logarithmic values (0-250) are in 1/5th of a dB, ranging from -20 to +30db
+	sinr := -20 + (session.Session.Sinr * 5)
+	if sinr < 20 {
+		bars = u32min(bars, 3)
+	}
+	if sinr < 13 {
+		bars = u32min(bars, 2)
+	}
+	if sinr <= 0 {
+		bars = u32min(bars, 1)
+	}
+	// RSRQ is an integer indicating the reference signal received quality (RSRQ) in dB,
+	// which is computed by the formula RSRQ = N*(RSRP/RSSI), where N is the number of
+	// Resource Blocks of the E-UTRA carrier RSSI
+	if session.Session.Rsrq < -10 {
+		bars = u32min(bars, 3)
+	}
+	if session.Session.Rsrq < -15 {
+		bars = u32min(bars, 2)
+	}
+	if session.Session.Rsrq < -20 {
+		bars = u32min(bars, 1)
+	}
+
+	// Done
+	return
+
+}
+
 // WireExtractSessionContext extracts session context from the wire message
 func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err error) {
 	req := notehubMessage{}
@@ -873,11 +944,15 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.Session.This.TLSSessions = req.UsageTLSSessions
 	session.Session.This.RcvdNotes = req.UsageRcvdNotes
 	session.Session.This.SentNotes = req.UsageSentNotes
-	var mcc, mnc, lac, cellid, rssi, sinr int
-	fmt.Sscanf(req.CellID, "%d,%d,%d,%d,%d,%d", &mcc, &mnc, &lac, &cellid, &rssi, &sinr)
+	var mcc, mnc, lac, cellid, rssi, sinr, rsrp, rsrq int
+	var rat string
+	fmt.Sscanf(req.CellID, "%d,%d,%d,%d,%d,%d,%d,%d,%s", &mcc, &mnc, &lac, &cellid, &rssi, &sinr, &rsrp, &rsrq, &rat)
 	session.Session.CellID = fmt.Sprintf("%d,%d,%d,%d", mcc, mnc, lac, cellid)
 	session.Session.Rssi = rssi
 	session.Session.Sinr = sinr
+	session.Session.Rsrp = rsrp
+	session.Session.Rsrq = rsrq
+	session.Session.Rat = rat
 	session.Session.Voltage = float64(req.Voltage100) / 100
 	session.Session.Temp = float64(req.Temp100) / 100
 	session.Notification = req.NotificationSession
