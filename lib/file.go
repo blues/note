@@ -86,9 +86,9 @@ func fsRemoveScheme(storageObject string) string {
 // so that it can exist in any reasonable file system.
 func fsCleanName(name string) string {
 	clean := ""
-	for _, r := range strings.ToLower(name) {
+	for _, r := range name {
 		c := string(r)
-		if (c >= "a" && c <= "z") || (c >= "0" && c <= "9") || (c == "_" || c == "-" || c == "/") {
+		if (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || (c == "_" || c == "-" || c == "/") {
 			clean = clean + c
 		} else {
 			if !cleanWithJSONExtension && c == "." {
