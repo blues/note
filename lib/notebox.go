@@ -1337,7 +1337,7 @@ func (box *Notebox) MergeNotebox(fromBoxfile Notefile) (err error) {
 
 	// Purge tombstones from this file, since much of what was replicated inward likely
 	// had been tombstones, some of which may no longer be needed.
-	boxfile.PurgeTombstones(box.endpointID)
+	boxfile.PurgeTombstones(note.DefaultHubEndpointID)
 
 	// If any of the notefile info docs are updated, flush the cached versions of same
 	// if it's possible to do so.  We do this by forcibly removing refcnt==0 from memory.
