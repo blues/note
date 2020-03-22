@@ -19,6 +19,9 @@ import (
 	"time"
 )
 
+// Debug
+var debugGetChanges = false
+
 // Notefile is The outermost data structure of a Notefile JSON
 // object, containing a set of notes that may be synchronized.
 type Notefile struct {
@@ -269,7 +272,7 @@ func (nf *Notefile) processEvent(event note.Event) (err error) {
 
 		// Purge tombstones, because unlike Merge there is no client-initiated call that is going to
 		// eventually get rid of all the dead wood within the file.
-		nf.PurgeTombstones(event.EndpointID)
+		nf.PurgeTombstones(note.DefaultHubEndpointID)
 
 	default:
 		return fmt.Errorf("unrecognized request: %s", event.Req)
@@ -902,7 +905,6 @@ func changeShouldBeIgnored(note *note.Note, endpointID string) bool {
 
 // GetChanges retrieves the next batch of changes being tracked, initializing a new tracker if necessary.
 func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Notefile, numChanges int, totalChanges int, since int64, until int64, err error) {
-	debugGetChanges := false
 	newNotefile := CreateNotefile(false)
 
 	// The special endpointID of "ReservedIDDelimiter" means that we do not want to use a tracker.  This
@@ -981,6 +983,10 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 	// should be ignored, or changes that are no longer here because of purged tombstones.
 	array := make([]int64, maxBatchSize+1)
 	for noteID, note := range nf.Notes {
+		if debugGetChanges {
+			debugf("note noteID:%s Change:%d Deleted:%t Sent:%t shouldIgnore:%t, isFullTombstone:%t\n",
+				noteID, note.Change, note.Deleted, note.Sent, changeShouldBeIgnored(&note, endpointID), isFullTombstone(note))
+		}
 		if note.Change >= since {
 			if optimize && changeShouldBeIgnored(&note, endpointID) {
 				if debugGetChanges {
@@ -1074,10 +1080,14 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 }
 
 // PurgeTombstones purges tombstones that are no longer needed by trackers
-func (nf *Notefile) PurgeTombstones(localEndpointID string) (err error) {
+func (nf *Notefile) PurgeTombstones(ignoreEndpointID string) (err error) {
 
 	// Lock for writing because we will be removing tombstones
 	nfLock.Lock()
+
+	if debugGetChanges {
+		debugf("purgeTombstones: %s\n", nf.notefileID)
+	}
 
 	// Compute the minimum change number of all tombstones
 	minDeletion := nf.Change
@@ -1090,6 +1100,9 @@ func (nf *Notefile) PurgeTombstones(localEndpointID string) (err error) {
 
 	// If we don't have any deleted notes, we're done
 	if minDeletion >= nf.Change {
+		if debugGetChanges {
+			debugf("purgeTombstones: no deleted notes\n")
+		}
 		nfLock.Unlock()
 		return nil
 	}
@@ -1098,9 +1111,9 @@ func (nf *Notefile) PurgeTombstones(localEndpointID string) (err error) {
 	// have a special case of tracker.Change == 0 meaning "inactive tracker"
 	minTracked := nf.Change
 	for trackerID, tracker := range nf.Trackers {
-		// Don't hold tombstones for local endpoint; we're only interested in
-		// keeping tombstones around for endpoints that are tracking local changes
-		if trackerID == localEndpointID {
+		// Don't hold tombstones for the specified (local) endpoint; we're only interested in
+		// keeping tombstones around for remote endpoints that are tracking local changes
+		if trackerID == ignoreEndpointID {
 			continue
 		}
 		if tracker.Change != 0 && tracker.Change < minTracked {
@@ -1110,13 +1123,23 @@ func (nf *Notefile) PurgeTombstones(localEndpointID string) (err error) {
 
 	// If there's nothing to purge, we're done
 	if minDeletion >= minTracked {
+		if debugGetChanges {
+			debugf("purgeTombstones: nothing to purge\n")
+		}
 		nfLock.Unlock()
 		return nil
+	}
+
+	if debugGetChanges {
+		debugf("purgeTombstones: purging with minTracked:%d\n", minTracked)
 	}
 
 	// Purge the tombstones
 	for noteID, note := range nf.Notes {
 		if note.Deleted && note.Change < minTracked {
+			if debugGetChanges {
+				debugf("purgeTombstones: deleting noteID:%s Sent:%t Deleted:%t Change:%d\n", noteID, note.Sent, note.Deleted, note.Change)
+			}
 			delete(nf.Notes, noteID)
 			nf.modCount++
 		}
@@ -1172,9 +1195,9 @@ func (nf *Notefile) updateChangeTrackerEx(endpointID string, since int64, until 
 	// We're done updating the tracker
 	nfLock.Unlock()
 
-	// Now, purge the tombstones
+	// Now, purge the tombstones, given that this endpoint ID no longer cares about them
 	if purgeTombstones {
-		nf.PurgeTombstones(endpointID)
+		nf.PurgeTombstones(note.DefaultHubEndpointID)
 	}
 
 	// Done

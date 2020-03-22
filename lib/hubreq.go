@@ -689,7 +689,7 @@ func hubNotefileMerge(session *HubSessionContext, req notehubMessage, rsp *noteh
 
 	// Purge tombstones from this file, since much of what was replicated inward likely
 	// had been tombstones, some of which may no longer be needed.
-	file.PurgeTombstones(box.endpointID)
+	file.PurgeTombstones(note.DefaultHubEndpointID)
 
 	// Done
 	openfile.Close()
@@ -739,7 +739,7 @@ func hubNotefilesMerge(session *HubSessionContext, req notehubMessage, rsp *note
 
 		// Purge tombstones from this file, since much of what was replicated inward likely
 		// had been tombstones, some of which may no longer be needed.
-		file.PurgeTombstones(box.endpointID)
+		file.PurgeTombstones(note.DefaultHubEndpointID)
 
 		// Done
 		openfile.Close()
