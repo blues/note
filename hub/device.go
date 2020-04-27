@@ -6,8 +6,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/google/uuid"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Lifetime of a session handler assignment, before device comes back and asks for a new handler

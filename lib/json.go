@@ -10,7 +10,6 @@
 package notelib
 
 import (
-	"encoding/json"
 	"github.com/blues/note-go/note"
 )
 
@@ -19,7 +18,7 @@ func jsonConvertJSONToNotefile(jsonNotefile []byte) (Notefile, error) {
 
 	// Unmarshal the JSON
 	newNotefile := Notefile{}
-	err := json.Unmarshal(jsonNotefile, &newNotefile)
+	err := note.JSONUnmarshal(jsonNotefile, &newNotefile)
 	if err != nil {
 		return Notefile{}, err
 	}
@@ -42,9 +41,9 @@ func (file *Notefile) uConvertToJSON(indent bool) (output []byte, err error) {
 
 	// Do the marshal
 	if indent {
-		output, err = json.MarshalIndent(file, "", "    ")
+		output, err = note.JSONMarshalIndent(file, "", "    ")
 	} else {
-		output, err = json.Marshal(file)
+		output, err = note.JSONMarshal(file)
 	}
 
 	return
@@ -65,5 +64,5 @@ func (file *Notefile) convertToJSON(indent bool) (output []byte, err error) {
 }
 
 // Body functions for Notebox body
-func noteboxBodyFromJSON(data []byte) (body noteboxBody) { json.Unmarshal(data, &body); return }
-func noteboxBodyToJSON(body noteboxBody) (data []byte)   { data, _ = json.Marshal(body); return }
+func noteboxBodyFromJSON(data []byte) (body noteboxBody) { note.JSONUnmarshal(data, &body); return }
+func noteboxBodyToJSON(body noteboxBody) (data []byte)   { data, _ = note.JSONMarshal(body); return }

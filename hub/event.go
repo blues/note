@@ -5,13 +5,13 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/blues/note-go/note"
-	"github.com/blues/note/lib"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/blues/note-go/note"
+	notelib "github.com/blues/note/lib"
 )
 
 // Event log directory
@@ -48,15 +48,16 @@ func notehubEvent(context interface{}, local bool, file *notelib.Notefile, event
 	event.Routed = time.Now().UTC().Unix()
 
 	// Marshal the event in a tightly-compressed manner, preparing to output it as Newline-Delimited JSON (NDJSON)
-	eventJSON, err := json.Marshal(event)
+	eventJSON, err := note.JSONMarshal(event)
 	if err != nil {
 		return err
 	}
 	eventNDJSON := string(eventJSON) + "\r\n"
 
 	// Generate a valid log file name
-	filename := fmt.Sprintf("%s-%s", time.Now().UTC().Format("2006-01-02"), event.DeviceUID)
-	filename = strings.Replace(filename, "imei:", "", 1) + ".json"
+	unPrefixedDeviceUID := strings.TrimPrefix(event.DeviceUID, "dev:")
+	filename := fmt.Sprintf("%s-%s", time.Now().UTC().Format("2006-01-02"), unPrefixedDeviceUID)
+	filename = filename + ".json"
 
 	// Append the JSON to the file
 	f, err := os.OpenFile(eventLogDirectory+"/"+filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -75,7 +76,7 @@ func notehubEvent(context interface{}, local bool, file *notelib.Notefile, event
 func eventBulk(session *notelib.HubSessionContext, local bool, file notelib.Notefile, event note.Event) (err error) {
 
 	// Get the template from the note
-	bodyJSON, err := json.Marshal(event.Body)
+	bodyJSON, err := note.JSONMarshal(event.Body)
 	if err != nil {
 		return err
 	}

@@ -10,13 +10,13 @@
 package notelib
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/blues/note-go/note"
-	"github.com/google/uuid"
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/blues/note-go/note"
+	"github.com/google/uuid"
 )
 
 // Debug
@@ -221,7 +221,7 @@ func (nf *Notefile) GetNote(noteID string) (xnote note.Note, err error) {
 	_, present := nf.Notes[noteID]
 	if !present {
 		nfLock.RUnlock()
-		return note.Note{}, fmt.Errorf(ErrNoteNoExist+" note not found: %s", noteID)
+		return note.Note{}, fmt.Errorf(note.ErrNoteNoExist+" note not found: %s", noteID)
 	}
 	xnote = nf.Notes[noteID]
 
@@ -294,7 +294,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 	xnote, err := nf.GetNote(NoteID)
 	if err != nil {
 		// This error is expected for notes that have been deleted from queues
-		if ErrorContains(err, ErrNoteNoExist) {
+		if ErrorContains(err, note.ErrNoteNoExist) {
 			return
 		}
 		debugf("event: GetNote(%s) error: %s", NoteID, err)
@@ -354,7 +354,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 			}
 		}
 		if event.Body != nil {
-			bodyJSON, err := json.Marshal(event.Body)
+			bodyJSON, err := note.JSONMarshal(event.Body)
 			if err != nil {
 				debugf(" (CANNOT MARSHAL TEMPLATE - BULK DATA DISCARDED)\n%v\n", event.Body)
 				return
@@ -390,18 +390,18 @@ func (nf *Notefile) event(local bool, NoteID string) {
 // unlockedAddNoteEx adds a newly-created Note to a Notefile, without modifying any
 // fields in the note other than the "Change" field.  The caller is responsible
 // for updating modCount.
-func (nf *Notefile) uAddNoteEx(noteID string, note *note.Note) error {
+func (nf *Notefile) uAddNoteEx(noteID string, xnote *note.Note) error {
 
 	// Find it
 	_, present := nf.Notes[noteID]
 	if present {
-		return fmt.Errorf(ErrNoteExists+" note already exists: %s", noteID)
+		return fmt.Errorf(note.ErrNoteExists+" note already exists: %s", noteID)
 	}
 
 	// Make the change
-	note.Change = nf.Change
+	xnote.Change = nf.Change
 	nf.Change++
-	nf.Notes[noteID] = *note
+	nf.Notes[noteID] = *xnote
 
 	// Done
 	return nil
@@ -479,7 +479,7 @@ func (nf *Notefile) uReplaceNote(noteID string, xnote *note.Note) error {
 
 	existingNote, present := nf.Notes[noteID]
 	if !present {
-		return fmt.Errorf("during merge cannot replace note: "+ErrNoteNoExist+" note not found: %s", noteID)
+		return fmt.Errorf("during merge cannot replace note: "+note.ErrNoteNoExist+" note not found: %s", noteID)
 	}
 
 	// If we're replacing a non-deleted note with a deletion of a Sent note, we can opportunistically purge
@@ -502,7 +502,7 @@ func (nf *Notefile) uUpdateNote(endpointID string, noteID string, xnote *note.No
 
 	_, present := nf.Notes[noteID]
 	if !present {
-		return fmt.Errorf(ErrNoteNoExist+" cannot update: note not found: %s", noteID)
+		return fmt.Errorf(note.ErrNoteNoExist+" cannot update: note not found: %s", noteID)
 	}
 
 	// Update the history, etc
@@ -519,7 +519,7 @@ func (nf *Notefile) UpdateNote(endpointID string, noteID string, xnote note.Note
 
 	// Exit if trying to update within a queue
 	if nf.Queue {
-		return fmt.Errorf(ErrNotefileQueueDisallowed + " operation not allowed on queue notefiles")
+		return fmt.Errorf(note.ErrNotefileQueueDisallowed + " operation not allowed on queue notefiles")
 	}
 
 	// Lock for writing
@@ -570,7 +570,7 @@ func (nf *Notefile) DeleteNote(endpointID string, noteID string) error {
 	xnote, present := nf.Notes[noteID]
 	if !present {
 		nfLock.Unlock()
-		return fmt.Errorf(ErrNoteNoExist+" cannot delete note: note not found: %s", noteID)
+		return fmt.Errorf(note.ErrNoteNoExist+" cannot delete note: note not found: %s", noteID)
 	}
 
 	// Delete it
@@ -598,7 +598,7 @@ func (nf *Notefile) resolveNoteConflicts(endpointID string, noteID string, xnote
 	_, present := nf.Notes[noteID]
 	if !present {
 		nfLock.Unlock()
-		return fmt.Errorf(ErrNoteNoExist+" cannot resolve conflicts: note not found: %s", noteID)
+		return fmt.Errorf(note.ErrNoteNoExist+" cannot resolve conflicts: note not found: %s", noteID)
 	}
 
 	updateNote(&xnote, endpointID, true, false)
@@ -740,7 +740,7 @@ func (nf *Notefile) AddTracker(trackerID string) error {
 	_, present := nf.Trackers[trackerID]
 	if present {
 		nfLock.Unlock()
-		return fmt.Errorf(ErrTrackerExists+" cannot add tracker: tracker already exists: %s", trackerID)
+		return fmt.Errorf(note.ErrTrackerExists+" cannot add tracker: tracker already exists: %s", trackerID)
 	}
 
 	// Add it as an active tracker.  (Change == 0 means inactive)
@@ -782,7 +782,7 @@ func (nf *Notefile) DeleteTracker(trackerID string) error {
 	_, present := nf.Trackers[trackerID]
 	if !present {
 		nfLock.Unlock()
-		return fmt.Errorf(ErrTrackerNoExist+" cannot delete tracker: Tracker not found: %s", trackerID)
+		return fmt.Errorf(note.ErrTrackerNoExist+" cannot delete tracker: Tracker not found: %s", trackerID)
 	}
 
 	delete(nf.Trackers, trackerID)

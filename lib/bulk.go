@@ -14,13 +14,14 @@ package notelib
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"github.com/blues/note/jsonxt"
-	"github.com/golang/snappy"
 	"io"
 	"math"
 	"strings"
+
+	"github.com/blues/note-go/note"
+	"github.com/blues/note/jsonxt"
+	"github.com/golang/snappy"
 )
 
 // Debugging
@@ -58,7 +59,7 @@ const flagsLength = 8
 func BulkDecodeTemplate(templateBodyJSON []byte, compressedPayload []byte) (context BulkTemplateContext, entries int, err error) {
 
 	body := BulkBody{}
-	json.Unmarshal(templateBodyJSON, &body)
+	note.JSONUnmarshal(templateBodyJSON, &body)
 	if body.NoteFormat != BulkNoteFormatV1 {
 		err = fmt.Errorf("bulk template: unrecognized format: %d", body.NoteFormat)
 		return
@@ -207,7 +208,7 @@ func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]inter
 
 	// Unmarshal into an object
 	jsonObj := map[string]interface{}{}
-	if json.Unmarshal([]byte(bodyJSON), &jsonObj) == nil {
+	if note.JSONUnmarshal([]byte(bodyJSON), &jsonObj) == nil {
 		jsonObj = omitempty(jsonObj)
 	}
 
