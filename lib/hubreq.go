@@ -6,12 +6,12 @@
 package notelib
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/blues/note-go/note"
 	"hash/crc32"
 	"strings"
 	"time"
+
+	"github.com/blues/note-go/note"
 )
 
 // Flag indicating TLS support on this server
@@ -94,7 +94,7 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 
 	// Display the request being processed
 	if debugHubRequest {
-		JSON, _ := json.Marshal(req)
+		JSON, _ := note.JSONMarshal(req)
 		debugf("Request (%db json, %db wire) %s\n%s\n", len(JSON), wirelen, msgTypeName(req.MessageType), JSON)
 	}
 
@@ -105,13 +105,13 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 		// we ever arrived here.)
 		sessionTicket, _, _, _, err2 := HubDiscover(req.DeviceUID, req.DeviceSN, req.ProductUID)
 		if err2 != nil {
-			err = fmt.Errorf("discover error "+ErrAuth+": %s", err2)
+			err = fmt.Errorf("discover error "+note.ErrAuth+": %s", err2)
 		} else {
 
 			if req.MessageType == msgDiscover {
 
 				if TLSSupport() && !session.Secure {
-					err = fmt.Errorf("secure session required " + ErrAuth)
+					err = fmt.Errorf("secure session required " + note.ErrAuth)
 					debugf("%s: attempt to discover with unsecure session\n", req.DeviceUID)
 				}
 
@@ -119,7 +119,7 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 
 				// If the ticket isn't an exact match, then it's not a valid connect attemp
 				if sessionTicket == "" || sessionTicket != req.HubSessionTicket {
-					err = fmt.Errorf("session not authorized " + ErrAuth + ErrTicket)
+					err = fmt.Errorf("session not authorized " + note.ErrAuth + note.ErrTicket)
 					debugf("TICKET REJECTED for %s (server may have been restarted)\n    Assigned: %s\n   Requested: %s\n", req.DeviceUID, sessionTicket, req.HubSessionTicket)
 				}
 			}
@@ -154,7 +154,7 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 
 		// If there is a null session ticket, the only request that's permitted is a Discover request.
 		if req.HubSessionTicket == "" && req.MessageType != msgDiscover {
-			err = fmt.Errorf("transaction is not allowed "+ErrAuth+" without a session ticket: %s", req.MessageType)
+			err = fmt.Errorf("transaction is not allowed "+note.ErrAuth+" without a session ticket: %s", req.MessageType)
 		}
 
 		// Process it and generate the return results
@@ -210,7 +210,7 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 
 	// Display the result
 	if debugHubRequest {
-		JSON, _ := json.Marshal(rsp)
+		JSON, _ := note.JSONMarshal(rsp)
 		debugf("Response (%db json, %db wire)\n%s\n", len(JSON), wirelen, JSON)
 	}
 
@@ -239,7 +239,7 @@ func HubErrorResponse(session *HubSessionContext, errorMessage string) (result [
 
 	// Display the result
 	if debugHubRequest {
-		JSON, _ := json.Marshal(rsp)
+		JSON, _ := note.JSONMarshal(rsp)
 		debugf("Response (%db json, %db wire)\n%s\n", len(JSON), wirelen, JSON)
 	}
 
@@ -349,8 +349,42 @@ func openHubNoteboxForDevice(session *HubSessionContext, deviceUID string, devic
 	// Set the default notification context for files opened within this box instance
 	box.SetEventInfo(deviceUID, deviceSN, productUID, appUID, event, context)
 
+	// If we haven't yet enum'ed the notefiles, do so
+	sawNotefile(session, box, "")
+
 	// Done
 	return
+
+}
+
+// Ensure that the specified notefile is in the list
+func sawNotefile(session *HubSessionContext, box *Notebox, notefileID string) {
+
+	// First time through
+	if !session.NotefilesUpdated {
+		var err error
+		session.Notefiles, err = box.Notefiles(false)
+		if err == nil {
+			session.NotefilesUpdated = true
+		}
+	}
+
+	// Exit if just loading the notefiles
+	if notefileID == "" {
+		return
+	}
+
+	// Ensure it's there
+	found := false
+	for _, n := range session.Notefiles {
+		if n == notefileID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		session.Notefiles = append(session.Notefiles, notefileID)
+	}
 
 }
 
@@ -358,7 +392,7 @@ func openHubNoteboxForDevice(session *HubSessionContext, deviceUID string, devic
 func hubWebRequest(session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
 
 	if fnHubWebRequest == nil {
-		return fmt.Errorf("no web request handler has been set " + ErrHubNoHandler)
+		return fmt.Errorf("no web request handler has been set " + note.ErrHubNoHandler)
 	}
 
 	// Unpack parameters for the request
@@ -418,7 +452,7 @@ func hubWebRequest(session *HubSessionContext, req notehubMessage, rsp *notehubM
 func hubSignal(session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
 
 	if fnHubSignal == nil {
-		return fmt.Errorf("no signal request handler has been set " + ErrHubNoHandler)
+		return fmt.Errorf("no signal request handler has been set " + note.ErrHubNoHandler)
 	}
 
 	// Unpack the notefile that contains the special note
@@ -444,7 +478,7 @@ func hubSignal(session *HubSessionContext, req notehubMessage, rsp *notehubMessa
 // Get Notification message
 func hubGetNotification(session *HubSessionContext, msg notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
 	if fnHubNotifications == nil {
-		return fmt.Errorf("no notification handler has been set " + ErrHubNoHandler)
+		return fmt.Errorf("no notification handler has been set " + note.ErrHubNoHandler)
 	}
 	if !session.Notification {
 		return fmt.Errorf("this transaction is not allowed on normal sessions used for request I/O")
@@ -580,6 +614,12 @@ func hubNoteboxMerge(session *HubSessionContext, req notehubMessage, rsp *notehu
 		return err
 	}
 
+	// Update the list of notefiles
+	notefiles, _ := box.Notefiles(false)
+	for _, notefileID := range notefiles {
+		sawNotefile(session, box, notefileID)
+	}
+
 	// Done
 	box.Close()
 
@@ -626,6 +666,7 @@ func hubNotefileChanges(session *HubSessionContext, req notehubMessage, rsp *not
 		box.Close()
 		return
 	}
+	sawNotefile(session, box, req.NotefileID)
 
 	// Get the tracked changes
 	chgfile, _, totalChanges, since, until, err5 := file.GetChanges(req.DeviceEndpointID, int(req.MaxChanges))
@@ -666,6 +707,7 @@ func hubNotefileMerge(session *HubSessionContext, req notehubMessage, rsp *noteh
 		box.Close()
 		return
 	}
+	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
 	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
@@ -725,6 +767,7 @@ func hubNotefilesMerge(session *HubSessionContext, req notehubMessage, rsp *note
 			box.Close()
 			return
 		}
+		sawNotefile(session, box, NotefileID)
 
 		// Set the notification context
 		file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
@@ -768,6 +811,7 @@ func hubNotefileUpdateChangeTracker(session *HubSessionContext, req notehubMessa
 		box.Close()
 		return
 	}
+	sawNotefile(session, box, req.NotefileID)
 
 	// Merge the tracked changes, also deleting tombstones
 	err = file.UpdateChangeTracker(req.DeviceEndpointID, req.Since, req.Until)
@@ -851,6 +895,7 @@ func hubNotefileAddNote(session *HubSessionContext, req notehubMessage, rsp *not
 		box.Close()
 		return
 	}
+	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
 	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
@@ -861,7 +906,7 @@ func hubNotefileAddNote(session *HubSessionContext, req notehubMessage, rsp *not
 	if err5 != nil {
 		err = err5
 	} else {
-		body, err = json.Marshal(ibody)
+		body, err = note.JSONMarshal(ibody)
 	}
 	if err == nil {
 		payload, err = req.GetPayload()
@@ -903,6 +948,7 @@ func hubNotefileDeleteNote(session *HubSessionContext, req notehubMessage, rsp *
 		box.Close()
 		return
 	}
+	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
 	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
@@ -939,12 +985,13 @@ func hubNotefileUpdateNote(session *HubSessionContext, req notehubMessage, rsp *
 		box.Close()
 		return
 	}
+	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
 	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
 
 	// Perform the operation
-	note, err5 := file.GetNote(req.NoteID)
+	xnote, err5 := file.GetNote(req.NoteID)
 	if err5 != nil {
 		err = err5
 		openfile.Close()
@@ -956,17 +1003,17 @@ func hubNotefileUpdateNote(session *HubSessionContext, req notehubMessage, rsp *
 	if err6 != nil {
 		err = err6
 	} else {
-		body, err = json.Marshal(ibody)
+		body, err = note.JSONMarshal(ibody)
 	}
 	if err == nil {
 		payload, err = req.GetPayload()
 	}
 	if err == nil {
-		note.SetBody(body)
-		note.SetPayload(payload)
+		xnote.SetBody(body)
+		xnote.SetPayload(payload)
 	}
 	if err == nil {
-		err = file.UpdateNote(req.DeviceEndpointID, req.NoteID, note)
+		err = file.UpdateNote(req.DeviceEndpointID, req.NoteID, xnote)
 	}
 	if err != nil {
 		openfile.Close()

@@ -7,8 +7,10 @@
 package notelib
 
 import (
-	"github.com/blues/note-go/note"
+	"net/http"
 	"time"
+
+	"github.com/blues/note-go/note"
 )
 
 // noteboxBody is the is the Body field within each note
@@ -54,14 +56,20 @@ type OpenNotefile struct {
 	deleted bool
 }
 
+// NoteboxInstance is the in-memory data structure for an open notebox
+type NoteboxInstance struct {
+	// Map of the Notefiles, indexed by storage object
+	openfiles map[string]OpenNotefile
+	// This notebox's storage object
+	storage string
+	// The endpoint ID that is to be used for all operations on the notebox
+	endpointID string
+}
+
 // Notebox is the in-memory data structure for an open notebox
 type Notebox struct {
 	// Map of the Notefiles, indexed by storage object
-	openfiles map[string]OpenNotefile
-	// The endpoint ID that is to be used for all operations on the notebox
-	endpointID string
-	// This notebox's storage object
-	storage string
+	instance *NoteboxInstance
 	// Default parameters to be passed to notefiles being opened in notebox
 	defaultEventFn         EventFunc   // The function to call when notifying of a change
 	defaultEventCtx        interface{} // And a parameter
@@ -71,4 +79,7 @@ type Notebox struct {
 	defaultEventAppUID     string
 	hubLocationService     string // The location service to use to find the hub
 	hubAppUID              string // The application UID to which to bind on the service
+	// For HTTP access control
+	clientHTTPReq *http.Request
+	clientHTTPRsp http.ResponseWriter
 }

@@ -5,9 +5,10 @@
 package main
 
 import (
-	"github.com/blues/note-go/note"
-	"github.com/blues/note/lib"
 	"time"
+
+	"github.com/blues/note-go/note"
+	notelib "github.com/blues/note/lib"
 )
 
 // NotehubDiscover is responsible for discovery of information about the services and apps

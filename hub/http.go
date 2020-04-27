@@ -7,15 +7,16 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/blues/note-go/notehub"
-	"github.com/blues/note/lib"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/blues/note-go/note"
+	"github.com/blues/note-go/notehub"
+	notelib "github.com/blues/note/lib"
 )
 
 // Handle inbound HTTP request to the "req" topic
@@ -46,7 +47,7 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 	// Attempt to extract the appUID and deviceUID from the request, giving these
 	// priority over what was in the URL
 	req := notehub.HubRequest{}
-	err = json.Unmarshal(reqJSON, &req)
+	err = note.JSONUnmarshal(reqJSON, &req)
 	if err == nil {
 		if req.DeviceUID != "" {
 			deviceUID = req.DeviceUID

@@ -113,6 +113,8 @@ type HubSessionContext struct {
 	EventQ           *chan HubSessionEvent
 	LatestUpdated    bool
 	Latest           *map[string]note.Event
+	Notefiles        []string
+	NotefilesUpdated bool
 	RouteInfo        map[string]interface{}
 	// Fields that are useful when logged in a session log
 	Session note.DeviceSession

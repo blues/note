@@ -5,11 +5,11 @@
 package notelib
 
 import (
-	"encoding/json"
 	"fmt"
+	"strings"
+
 	"github.com/blues/note-go/note"
 	"github.com/blues/note-go/notecard"
-	"strings"
 )
 
 // Request performs a local operation using the JSON API
@@ -24,10 +24,10 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	}
 
 	// Unmarshal the incoming request
-	err = json.Unmarshal(reqJSON, &req)
+	err = note.JSONUnmarshal(reqJSON, &req)
 	if err != nil {
 		rsp.Err = fmt.Sprintf("unknown request: %s", err)
-		rspJSON, _ = json.Marshal(rsp)
+		rspJSON, _ = note.JSONMarshal(rsp)
 		if debugRequest {
 			debugf("<< %s\n", string(rspJSON))
 		}
@@ -54,6 +54,11 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			rsp.Err = "no notefiles were specified"
 			break
 		}
+		err = box.VerifyAccess(note.ACResourceNotefiles, note.ACActionCreate)
+		if err != nil {
+			rsp.Err = fmt.Sprintf("%s", err)
+			break
+		}
 		for notefileID, notefileInfo := range *req.FileInfo {
 			err = box.AddNotefile(notefileID, &notefileInfo)
 			if err != nil && rsp.Err == "" {
@@ -64,6 +69,11 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	case notecard.ReqFileDelete:
 		if req.Files == nil || len(*req.Files) == 0 {
 			rsp.Err = "no notefiles were specified"
+			break
+		}
+		err = box.VerifyAccess(note.ACResourceNotefiles, note.ACActionDelete)
+		if err != nil {
+			rsp.Err = fmt.Sprintf("%s", err)
 			break
 		}
 		deleteFiles := *req.Files
@@ -78,6 +88,21 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		if req.NotefileID == "" {
 			rsp.Err = "no notefile specified"
 			break
+		}
+		// Check for access to add a note
+		err = box.VerifyAccess(note.ACResourceNotefile+req.NotefileID, note.ACActionCreate)
+		if err != nil {
+
+			// Preset assuming access failure
+			rsp.Err = fmt.Sprintf("%s", err)
+
+			// Special-case access check for notefiles with "add only" access control
+			var info note.NotefileInfo
+			info, err = box.GetNotefileInfo(req.NotefileID)
+			if err != nil || !info.AnonAddAllowed {
+				break
+			}
+
 		}
 		// Make sure that the file exists
 		if !box.NotefileExists(req.NotefileID) {
@@ -110,6 +135,11 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			rsp.Err = "no note ID specified"
 			break
 		}
+		err = box.VerifyAccess(note.ACResourceNotefile+req.NotefileID, note.ACActionUpdate)
+		if err != nil {
+			rsp.Err = fmt.Sprintf("%s", err)
+			break
+		}
 		var xnote note.Note
 		xnote, err = box.GetNote(req.NotefileID, req.NoteID)
 		if err != nil {
@@ -139,6 +169,11 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		}
 
 	case notecard.ReqNoteDelete:
+		err = box.VerifyAccess(note.ACResourceNotefile+req.NotefileID, note.ACActionDelete)
+		if err != nil {
+			rsp.Err = fmt.Sprintf("%s", err)
+			break
+		}
 		if req.NotefileID == "" {
 			rsp.Err = "no notefile specified"
 		} else {
@@ -159,6 +194,20 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			if req.NoteID == "" {
 				rsp.Err = "no note ID specified"
 			} else {
+				isQueue, _, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
+				if isQueue || req.Delete {
+					err = box.VerifyAccess(note.ACResourceNotefile+req.NotefileID, note.ACActionRead+note.ACActionAnd+note.ACActionDelete)
+					if err != nil {
+						rsp.Err = fmt.Sprintf("%s", err)
+						break
+					}
+				} else {
+					err = box.VerifyAccess(note.ACResourceNotefile+req.NotefileID, note.ACActionRead)
+					if err != nil {
+						rsp.Err = fmt.Sprintf("%s", err)
+						break
+					}
+				}
 				// Get the note
 				var xnote note.Note
 				xnote, err = box.GetNote(req.NotefileID, req.NoteID)
@@ -166,10 +215,12 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 					rsp.Err = fmt.Sprintf("error getting note: %s", err)
 				} else {
 					rsp.NoteID = req.NoteID
-					isQueue, _, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
 					if !isQueue && xnote.Deleted {
+						if !req.Deleted {
+							rsp.Err = fmt.Sprintf("note has been deleted: %s "+note.ErrNoteNoExist, req.NoteID)
+							break
+						}
 						rsp.Deleted = true
-						rsp.Err = fmt.Sprintf("note has been deleted: %s "+ErrNoteNoExist, req.NoteID)
 					}
 					if xnote.Body != nil {
 						rsp.Body = &xnote.Body
@@ -177,6 +228,9 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 					if len(xnote.Payload) != 0 {
 						payload := xnote.GetPayload()
 						rsp.Payload = &payload
+					}
+					if req.Delete {
+						box.DeleteNote(endpointID, req.NotefileID, req.NoteID)
 					}
 				}
 			}
@@ -187,6 +241,13 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	case notecard.ReqFileChanges:
 		var notefiles []string
 		changes := 0
+
+		// Check access
+		err = box.VerifyAccess(note.ACResourceNotefiles, note.ACActionRead)
+		if err != nil {
+			rsp.Err = fmt.Sprintf("%s", err)
+			break
+		}
 
 		// If no tracker, generate the entire list of notefiles
 		tracker := req.TrackerID
@@ -241,7 +302,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			notefileID := notefiles[i]
 
 			// If this is the notebox's notefile, omit it
-			if notefileID == box.endpointID {
+			if notefileID == box.EndpointID() {
 				continue
 			}
 
@@ -277,6 +338,26 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		fallthrough
 	case notecard.ReqNoteChanges:
 
+		if req.NotefileID == "" {
+			rsp.Err = "no notefile specified"
+			break
+		}
+
+		// Check access
+		if req.Delete {
+			err = box.VerifyAccess(note.ACResourceNotefile+req.NotefileID, note.ACActionRead+note.ACActionAnd+note.ACActionDelete)
+			if err != nil {
+				rsp.Err = fmt.Sprintf("%s", err)
+				break
+			}
+		} else {
+			err = box.VerifyAccess(note.ACResourceNotefile+req.NotefileID, note.ACActionRead)
+			if err != nil {
+				rsp.Err = fmt.Sprintf("%s", err)
+				break
+			}
+		}
+
 		// Make sure that a tracker name is specified
 		if req.TrackerID == "" {
 			rsp.Err = "a tracker name must be specified"
@@ -286,11 +367,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		// Make sure that it's a valid tracker in that it's not one of our known endpoints
 		if req.TrackerID == note.DefaultDeviceEndpointID || req.TrackerID == note.DefaultHubEndpointID {
 			rsp.Err = fmt.Sprintf("cannot use this reserved tracker name: %s", req.TrackerID)
-			break
-		}
-
-		if req.NotefileID == "" {
-			rsp.Err = "no notefile specified"
 			break
 		}
 
@@ -333,6 +409,11 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 				}
 			} else {
 
+				// Skip it if we don't want deleted
+				if xnote.Deleted && !req.Deleted {
+					continue
+				}
+
 				// Get the info from the note
 				info := note.Info{}
 				if xnote.Deleted {
@@ -367,7 +448,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	}
 
 	// Marshal a response
-	rspJSON, _ = json.Marshal(rsp)
+	rspJSON, _ = note.JSONMarshal(rsp)
 
 	// Append a \n so that the requestor can recognize end-of-response
 	rspJSON = []byte(string(rspJSON) + "\n")
@@ -386,6 +467,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 func ErrorResponse(err error) (response []byte) {
 	rsp := notecard.Request{}
 	rsp.Err = fmt.Sprintf("%s", err)
-	response, _ = json.Marshal(&rsp)
+	response, _ = note.JSONMarshal(&rsp)
 	return
 }

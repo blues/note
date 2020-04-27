@@ -9,8 +9,9 @@
 package notelib
 
 import (
-	"github.com/blues/note-go/note"
 	"time"
+
+	"github.com/blues/note-go/note"
 )
 
 // updateNote performs the bulk of Note Update, Delete, Merge operations

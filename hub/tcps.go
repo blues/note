@@ -11,11 +11,12 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	"github.com/blues/note/lib"
 	"io/ioutil"
 	"math/big"
 	"net"
 	"time"
+
+	notelib "github.com/blues/note/lib"
 )
 
 // tcpsHandler kicks off TLS request server

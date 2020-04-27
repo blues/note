@@ -7,14 +7,15 @@ package notelib
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"github.com/golang/protobuf/proto"
-	"github.com/golang/snappy"
 	"io"
 	"net"
 	"strings"
 	"time"
+
+	"github.com/blues/note-go/note"
+	"github.com/golang/protobuf/proto"
+	"github.com/golang/snappy"
 )
 
 // Available JSON compression formats.
@@ -321,7 +322,7 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 func (msg *notehubMessage) SetNotefile(notefile Notefile) error {
 
 	// Set compressed form
-	JSON, err := json.Marshal(notefile)
+	JSON, err := note.JSONMarshal(notefile)
 	if err != nil {
 		return err
 	}
@@ -347,7 +348,7 @@ func (msg *notehubMessage) GetNotefile() (notefile Notefile, err error) {
 			err = err2
 			return
 		}
-		err = json.Unmarshal(jdata, &notefile)
+		err = note.JSONUnmarshal(jdata, &notefile)
 		if err != nil {
 			return
 		}
@@ -373,7 +374,7 @@ func (msg *notehubMessage) SetNotefiles(notefiles map[string]Notefile) error {
 	msg.nf.Notefiles = &notefiles
 
 	// Set compressed form
-	JSON, err := json.Marshal(notefiles)
+	JSON, err := note.JSONMarshal(notefiles)
 	if err != nil {
 		return err
 	}
@@ -399,7 +400,7 @@ func (msg *notehubMessage) GetNotefiles() (notefiles map[string]Notefile, err er
 			err = err2
 			return
 		}
-		err = json.Unmarshal(jdata, &notefiles)
+		err = note.JSONUnmarshal(jdata, &notefiles)
 		if err != nil {
 			return
 		}
@@ -428,7 +429,7 @@ func (msg *notehubMessage) SetBody(body map[string]interface{}) error {
 	msg.nf.Body = &body
 
 	// Set compressed form
-	JSON, err := json.Marshal(body)
+	JSON, err := note.JSONMarshal(body)
 	if err != nil {
 		return err
 	}
@@ -454,7 +455,7 @@ func (msg *notehubMessage) GetBody() (body map[string]interface{}, err error) {
 		if err2 != nil {
 			err = err2
 		} else {
-			err = json.Unmarshal(jdata, &body)
+			err = note.JSONUnmarshal(jdata, &body)
 		}
 		return
 	}
@@ -1055,7 +1056,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 			err = err2
 			return
 		}
-		err = json.Unmarshal(jdata, msg.nf.Notefile)
+		err = note.JSONUnmarshal(jdata, msg.nf.Notefile)
 		if err != nil {
 			return
 		}
@@ -1069,7 +1070,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 			err = err2
 			return
 		}
-		err = json.Unmarshal(jdata, msg.nf.Notefiles)
+		err = note.JSONUnmarshal(jdata, msg.nf.Notefiles)
 		if err != nil {
 			return
 		}
@@ -1083,7 +1084,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 			err = err2
 			return
 		}
-		err = json.Unmarshal(jdata, msg.nf.Body)
+		err = note.JSONUnmarshal(jdata, msg.nf.Body)
 		if err != nil {
 			return
 		}
@@ -1125,13 +1126,13 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		}
 		if err2, ok := err2.(net.Error); ok && err2.Timeout() {
 			if !waitIndefinitely {
-				err = fmt.Errorf("wire read: " + ErrTimeout + " timeout on read")
+				err = fmt.Errorf("wire read: " + note.ErrTimeout + " timeout on read")
 				return
 			}
 			continue
 		}
 		if err2 == io.EOF {
-			err = fmt.Errorf("wire read: " + ErrClosed + " connection closed")
+			err = fmt.Errorf("wire read: " + note.ErrClosed + " connection closed")
 			return
 		}
 		if err2 != nil {

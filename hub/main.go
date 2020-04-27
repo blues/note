@@ -7,11 +7,12 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"github.com/blues/note/lib"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"time"
+
+	notelib "github.com/blues/note/lib"
 )
 
 // Address/ports of our server, used to spawn listers and to assign handlers to devices
