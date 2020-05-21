@@ -89,7 +89,7 @@ type notehubMessage struct {
 	NotificationSession            bool   `json:"N,omitempty"`
 	Voltage100                     int32  `json:"V,omitempty"`
 	Temp100                        int32  `json:"T,omitempty"`
-	Development                    bool   `json:"Z,omitempty"`
+	ContinuousSession              bool   `json:"Z,omitempty"`
 }
 
 // HubSessionContext are the fields that are coordinated between the client and

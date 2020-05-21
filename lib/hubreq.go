@@ -147,9 +147,9 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 			req.UsageTLSSessions = session.Session.This.TLSSessions
 			req.UsageRcvdNotes = session.Session.This.RcvdNotes
 			req.UsageSentNotes = session.Session.This.SentNotes
-			req.CellID = session.Session.CellID
 			req.NotificationSession = session.Notification
-			req.Development = session.Session.Development
+			req.ContinuousSession = session.Session.ContinuousSession
+			req.CellID = session.Session.CellID
 		}
 
 		// If there is a null session ticket, the only request that's permitted is a Discover request.
@@ -570,7 +570,7 @@ func hubNoteboxChanges(session *HubSessionContext, req notehubMessage, rsp *note
 	}
 
 	// Get the tracked changes
-	chgfile, _, totalChanges, since, until, err4 := box.GetChanges(req.DeviceEndpointID, defaultMaxGetNoteboxChangesBatchSize)
+	chgfile, _, totalChanges, _, since, until, err4 := box.GetChanges(req.DeviceEndpointID, defaultMaxGetNoteboxChangesBatchSize)
 	if err4 != nil {
 		err = err4
 		box.Close()
@@ -669,7 +669,7 @@ func hubNotefileChanges(session *HubSessionContext, req notehubMessage, rsp *not
 	sawNotefile(session, box, req.NotefileID)
 
 	// Get the tracked changes
-	chgfile, _, totalChanges, since, until, err5 := file.GetChanges(req.DeviceEndpointID, int(req.MaxChanges))
+	chgfile, _, totalChanges, _, since, until, err5 := file.GetChanges(req.DeviceEndpointID, int(req.MaxChanges))
 	if err5 != nil {
 		err = err5
 		openfile.Close()

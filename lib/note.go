@@ -132,6 +132,12 @@ func updateNote(xnote *note.Note, endpointID string, resolveConflicts bool, dele
 
 	}
 
+	// Delete the body and payload
+	if deleted {
+		xnote.Body = nil
+		xnote.Payload = nil
+	}
+
 }
 
 // compareModified compares two Notes, and returns

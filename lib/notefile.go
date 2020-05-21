@@ -12,6 +12,7 @@ package notelib
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -903,8 +904,31 @@ func changeShouldBeIgnored(note *note.Note, endpointID string) bool {
 
 }
 
+// NotefileIDIsReserved returns true if the notefileID is reserved
+func NotefileIDIsReserved(notefileID string) bool {
+
+	// This character is blocked from being in a notefile name because we use it as a separator
+	// within the notebox
+	if strings.Contains(notefileID, ReservedIDDelimiter) {
+		return true
+	}
+
+	// Certain notefiles are explicitly allowed because we expect users to be messing inside them
+	if notefileID == note.TrackNotefile ||
+		notefileID == note.LogNotefile ||
+		notefileID == note.HealthNotefile ||
+		notefileID == note.NotecardRequestNotefile ||
+		notefileID == note.NotecardResponseNotefile {
+		return true
+	}
+
+	// Underscore is our primary reserved character
+	return strings.HasPrefix(notefileID, "_")
+
+}
+
 // GetChanges retrieves the next batch of changes being tracked, initializing a new tracker if necessary.
-func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Notefile, numChanges int, totalChanges int, since int64, until int64, err error) {
+func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Notefile, numChanges int, totalChanges int, totalNotes int, since int64, until int64, err error) {
 	newNotefile := CreateNotefile(false)
 
 	// The special endpointID of "ReservedIDDelimiter" means that we do not want to use a tracker.  This
@@ -987,6 +1011,9 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 			debugf("note noteID:%s Change:%d Deleted:%t Sent:%t shouldIgnore:%t, isFullTombstone:%t\n",
 				noteID, note.Change, note.Deleted, note.Sent, changeShouldBeIgnored(&note, endpointID), isFullTombstone(note))
 		}
+		if !isFullTombstone(note) {
+			totalNotes++
+		}
 		if note.Change >= since {
 			if optimize && changeShouldBeIgnored(&note, endpointID) {
 				if debugGetChanges {
@@ -1022,7 +1049,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 	// If we're just counting, exit
 	if countOnly {
 		nfLock.Unlock()
-		return newNotefile, 0, totalChanges, since, until, nil
+		return newNotefile, 0, totalChanges, totalNotes, since, until, nil
 	}
 
 	// Enumerate to see what to return
@@ -1048,7 +1075,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 		err = newNotefile.uAddNoteEx(noteID, &note)
 		if err != nil {
 			nfLock.Unlock()
-			return newNotefile, 0, 0, 0, 0, err
+			return newNotefile, 0, 0, 0, 0, 0, err
 		}
 		numChanges++
 		newNotefile.modCount++
@@ -1075,7 +1102,7 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 
 	// Done
 	nfLock.Unlock()
-	return newNotefile, numChanges, totalChanges, since, until, nil
+	return newNotefile, numChanges, totalChanges, totalNotes, since, until, nil
 
 }
 
@@ -1229,4 +1256,52 @@ func (nf *Notefile) InternalizePayload(xp []byte) (err error) {
 	}
 	nfLock.Unlock()
 	return
+}
+
+// GetLeastRecentNoteID enumerates and returns the first logical note to dequeue
+func (nf *Notefile) GetLeastRecentNoteID() (noteID string, err error) {
+
+	// Compute the minimum change number of all notes
+	var minChangeNoteID, minModifiedNoteID string
+	var minModified int64
+	minChange := nf.Change
+	nfLock.RLock()
+	for noteID, xnote := range nf.Notes {
+		if xnote.Deleted {
+			continue
+		}
+		// Track the minimum deletion actually found, for later purge
+		if xnote.Change < minChange {
+			minChange = xnote.Change
+			minChangeNoteID = noteID
+		}
+		// Track the minimum modified date, only believing "real" unix dates
+		var modified int64
+		if xnote.Histories != nil && len(*xnote.Histories) > 0 {
+			histories := *xnote.Histories
+			modified = histories[0].When
+		}
+		if modified > 1483228800 && (modified == 0 || modified < minModified) {
+			minModified = modified
+			minModifiedNoteID = noteID
+		}
+	}
+	nfLock.RUnlock()
+
+	// Always prefer to order things based on unix modified dates
+	if minModified != 0 {
+		noteID = minModifiedNoteID
+		return
+	}
+
+	// Otherwise, use the minimum by change
+	if minChange < nf.Change {
+		noteID = minChangeNoteID
+		return
+	}
+
+	// No notes found
+	err = fmt.Errorf("no notes available in queue " + note.ErrNoteNoExist)
+	return
+
 }
