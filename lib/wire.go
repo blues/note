@@ -686,6 +686,9 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.NotificationSession != false {
 		pb.NotificationSession = &msg.NotificationSession
 	}
+	if msg.ContinuousSession != false {
+		pb.ContinuousSession = &msg.ContinuousSession
+	}
 	if msg.Voltage100 != 0 {
 		pb.Voltage100 = &msg.Voltage100
 	}
@@ -957,6 +960,7 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.Session.Voltage = float64(req.Voltage100) / 100
 	session.Session.Temp = float64(req.Temp100) / 100
 	session.Notification = req.NotificationSession
+	session.Session.ContinuousSession = req.ContinuousSession
 	if req.MessageType == msgDiscover {
 		session.Discovery = true
 	}
@@ -1028,6 +1032,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.SessionIDNext = pb.GetSessionIDNext()
 	msg.SessionIDMismatch = pb.GetSessionIDMismatch()
 	msg.NotificationSession = pb.GetNotificationSession()
+	msg.ContinuousSession = pb.GetContinuousSession()
 	msg.Voltage100 = pb.GetVoltage100()
 	msg.Temp100 = pb.GetTemp100()
 	msg.UsageProvisioned = pb.GetUsageProvisioned()
