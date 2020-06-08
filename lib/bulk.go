@@ -14,6 +14,7 @@ package notelib
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -206,9 +207,11 @@ func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]inter
 		}
 	}
 
-	// Unmarshal into an object
+	// Unmarshal into an object.  Note that we must use the json package rather than the
+	// note.JSONUnmarshal because we need to unmarshal into values that are NOT of a
+	// "jsonNumber" data type, because omitempty doesn't (yet) handle that type
 	jsonObj := map[string]interface{}{}
-	if note.JSONUnmarshal([]byte(bodyJSON), &jsonObj) == nil {
+	if json.Unmarshal([]byte(bodyJSON), &jsonObj) == nil {
 		jsonObj = omitempty(jsonObj)
 	}
 

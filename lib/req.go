@@ -92,8 +92,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 
 	case notecard.ReqNoteAdd:
 		if req.NotefileID == "" {
-			rsp.Err = "no notefile specified"
-			break
+			req.NotefileID = note.HubDefaultInboundNotefile
 		}
 		// Check for access to add a note
 		err = box.VerifyAccess(note.ACResourceNotefile+req.NotefileID, note.ACActionCreate)
@@ -111,9 +110,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 
 		}
 		// Make sure that the file exists
-		if req.NotefileID == "" {
-			req.NotefileID = note.HubDefaultInboundNotefile
-		}
 		if NotefileIDIsReserved(req.NotefileID) {
 			rsp.Err = "reserved notefile name"
 			break
@@ -192,9 +188,13 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		}
 		if req.Payload != nil {
 			xnote.Payload = *req.Payload
+		} else {
+			xnote.Payload = nil
 		}
 		if req.Body != nil {
 			xnote.Body = *req.Body
+		} else {
+			xnote.Body = nil
 		}
 		err = box.UpdateNote(endpointID, req.NotefileID, req.NoteID, xnote)
 		if err != nil {
@@ -227,9 +227,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		}
 
 	case notecard.ReqNoteGet:
-		if req.NotefileID == "" {
-			req.NotefileID = note.HubDefaultInboundNotefile
-		}
 		if req.NotefileID == "" {
 			rsp.Err = "no notefile specified"
 			break
