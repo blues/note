@@ -231,10 +231,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			rsp.Err = "no notefile specified"
 			break
 		}
-		if NotefileIDIsReserved(req.NotefileID) {
-			rsp.Err = "reserved notefile name"
-			break
-		}
 		isQueue, toHub, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
 		if req.NoteID == "" {
 			if !isQueue || !toHub {
@@ -426,10 +422,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			rsp.Err = "no notefile specified"
 			break
 		}
-		if NotefileIDIsReserved(req.NotefileID) {
-			rsp.Err = "reserved notefile name"
-			break
-		}
 
 		// Check access
 		if req.Delete {
@@ -548,7 +540,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	// Marshal a response
 	rspJSON, _ = note.JSONMarshal(rsp)
 
-	// Append a \n so that the requestor can recognize end-of-response
+	// Append a \n so that the requester can recognize end-of-response
 	rspJSON = []byte(string(rspJSON) + "\n")
 
 	// Debug
