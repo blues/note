@@ -961,6 +961,7 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.Session.Temp = float64(req.Temp100) / 100
 	session.Notification = req.NotificationSession
 	session.Session.ContinuousSession = req.ContinuousSession
+	session.Session.ScanResults = req.nf.Payload
 	if req.MessageType == msgDiscover {
 		session.Discovery = true
 	}
