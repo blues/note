@@ -928,7 +928,7 @@ func NotefileIDIsReserved(notefileID string) bool {
 }
 
 // GetChanges retrieves the next batch of changes being tracked, initializing a new tracker if necessary.
-func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Notefile, numChanges int, totalChanges int, totalNotes int, since int64, until int64, err error) {
+func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBatchSize int) (chgfile Notefile, numChanges int, totalChanges int, totalNotes int, since int64, until int64, err error) {
 	newNotefile := CreateNotefile(false)
 
 	// The special endpointID of "ReservedIDDelimiter" means that we do not want to use a tracker.  This
@@ -939,7 +939,6 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 	// There is a special form, only used internally and not exposed at the API, wherein if maxBatchSize
 	// is -1 it is an instruction NOT to generate any output but instead just to count.
 	countOnly := false
-	includeTombstones := true
 	if maxBatchSize == -1 {
 		maxBatchSize = 0
 		countOnly = true
@@ -1068,7 +1067,11 @@ func (nf *Notefile) GetChanges(endpointID string, maxBatchSize int) (chgfile Not
 			}
 			continue
 		}
-		// Add it
+		// If not including tombstones, skip it
+		if !(includeTombstones || !isFullTombstone(note)) {
+			continue
+		}
+		// We're now committed to the change.  Add it, and bump the change count
 		if debugGetChanges {
 			debugf("GetChanges adding %s note.Change:%d\n", noteID, note.Change)
 		}

@@ -669,7 +669,7 @@ func hubNotefileChanges(session *HubSessionContext, req notehubMessage, rsp *not
 	sawNotefile(session, box, req.NotefileID)
 
 	// Get the tracked changes
-	chgfile, _, totalChanges, _, since, until, err5 := file.GetChanges(req.DeviceEndpointID, int(req.MaxChanges))
+	chgfile, _, totalChanges, _, since, until, err5 := file.GetChanges(req.DeviceEndpointID, true, int(req.MaxChanges))
 	if err5 != nil {
 		err = err5
 		openfile.Close()
