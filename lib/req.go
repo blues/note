@@ -384,7 +384,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			}
 
 			// Use a special internal "count only" mode of this call, for efficiency
-			_, _, totalChanges, totalNotes, _, _, err := file.GetChanges(tracker, -1)
+			_, _, totalChanges, totalNotes, _, _, err := file.GetChanges(tracker, false, -1)
 			if err != nil {
 				rsp.Err = fmt.Sprintf("cannot get changes for %s: %s", notefileID, err)
 				break
@@ -465,7 +465,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		}
 
 		// Get the changed notes for that tracker, up to the specified (or default) max
-		chgfile, _, totalChanges, totalNotes, since, until, err := file.GetChanges(req.TrackerID, int(req.Max))
+		chgfile, _, totalChanges, totalNotes, since, until, err := file.GetChanges(req.TrackerID, req.Deleted, int(req.Max))
 		if err != nil {
 			if req.Stop && updateTracker {
 				file.DeleteTracker(req.TrackerID)
@@ -485,6 +485,9 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			file.DeleteTracker(req.TrackerID)
 		}
 
+		// We'll need to know if it's a queue
+		isQueue, _, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
+
 		// Generate the list of notes in the response data structure
 		noteIDs := chgfile.NoteIDs(true)
 		infolist := map[string]note.Info{}
@@ -497,14 +500,9 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 				break
 			}
 
-			// Skip it if we don't want deleted
-			if xnote.Deleted && !req.Deleted {
-				continue
-			}
-
 			// Get the info from the note
 			info := note.Info{}
-			if xnote.Deleted {
+			if !isQueue && xnote.Deleted {
 				info.Deleted = true
 			}
 			if xnote.Body != nil {

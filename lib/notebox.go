@@ -1304,7 +1304,7 @@ func (box *Notebox) GetChanges(endpointID string, maxBatchSize int) (file Notefi
 	boxfile := boxopenfile.notefile
 
 	// Get the tracked changes for that notefile
-	notefile, numChanges, totalChanges, totalNotes, since, until, err := boxfile.GetChanges(endpointID, maxBatchSize)
+	notefile, numChanges, totalChanges, totalNotes, since, until, err := boxfile.GetChanges(endpointID, true, maxBatchSize)
 	if err != nil {
 		return
 	}
