@@ -55,7 +55,7 @@ func HubSetReadFile(fn ReadFileFunc) {
 }
 
 // WebRequestFunc performs a web request on behalf of a device
-type WebRequestFunc func(deviceUID string, productUID string, alias string, reqtype string, target string, bodyJSON []byte, payloadJSON []byte, session *HubSessionContext) (rspstatuscode int, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
+type WebRequestFunc func(deviceUID string, productUID string, alias string, reqtype string, target string, bodyJSON []byte, payload []byte, session *HubSessionContext) (rspstatuscode int, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
 
 var fnHubWebRequest WebRequestFunc
 
@@ -65,7 +65,7 @@ func HubSetWebRequest(fn WebRequestFunc) {
 }
 
 // SignalFunc performs a web request on behalf of a device
-type SignalFunc func(deviceUID string, bodyJSON []byte, payloadJSON []byte, session *HubSessionContext) (err error)
+type SignalFunc func(deviceUID string, bodyJSON []byte, payload []byte, session *HubSessionContext) (err error)
 
 var fnHubSignal SignalFunc
 

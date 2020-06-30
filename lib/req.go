@@ -302,6 +302,8 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 	case notecard.ReqFileGetL:
 		fallthrough
 	case notecard.ReqFileChanges:
+		fallthrough
+	case notecard.ReqFileChangesPending:
 		var notefiles []string
 		changes := 0
 		total := 0
@@ -312,6 +314,14 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		if err != nil {
 			rsp.Err = fmt.Sprintf("%s", err)
 			break
+		}
+
+		// Special way of requesting to see if there is stuff pending to be uploaded
+		if req.Req == notecard.ReqFileChangesPending {
+			req.Pending = true
+		}
+		if req.Pending {
+			req.TrackerID = "^"
 		}
 
 		// If no tracker, generate the entire list of notefiles
@@ -329,10 +339,15 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 
 		} else {
 
-			// Make sure that it's a valid tracker in that it's not one of our known endpoints
-			if req.TrackerID == note.DefaultDeviceEndpointID || req.TrackerID == note.DefaultHubEndpointID {
-				rsp.Err = fmt.Sprintf("cannot use this reserved tracker name: %s", req.TrackerID)
-				break
+			// Handle special case of "^" meaning things to be downloaded
+			if req.TrackerID == "^" {
+				req.TrackerID = note.DefaultDeviceEndpointID
+			} else {
+				// Make sure that it's a valid tracker in that it's not one of our known endpoints
+				if req.TrackerID == note.DefaultDeviceEndpointID || req.TrackerID == note.DefaultHubEndpointID {
+					rsp.Err = fmt.Sprintf("cannot use this reserved tracker name: %s", req.TrackerID)
+					break
+				}
 			}
 
 			// Update the environment vars for the notebox, which may result in a changed _env.dbs
@@ -411,6 +426,10 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			}
 			rsp.Total = int32(total)
 		}
+
+		// Return whether or not pending
+		rsp.Pending = req.Pending && rsp.Changes > 0
+		break
 
 	case notecard.ReqNotesGetL:
 		fallthrough
