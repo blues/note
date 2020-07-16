@@ -919,7 +919,7 @@ func NotefileIDIsReserved(notefileID string) bool {
 		notefileID == note.HealthNotefile ||
 		notefileID == note.NotecardRequestNotefile ||
 		notefileID == note.NotecardResponseNotefile {
-		return true
+		return false
 	}
 
 	// Underscore is our primary reserved character
