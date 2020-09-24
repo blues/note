@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/blues/note-go/note"
@@ -56,6 +57,11 @@ type BulkTemplateContext struct {
 // The flags length is sizeof(int64)
 const flagsLength = 8
 
+// See if a floating value is ".1" - that is, between N.0 and N.2
+func isPointOne(test float64, base float64) bool {
+	return test > base && test < base+0.2
+}
+
 // BulkDecodeTemplate decodes the template
 func BulkDecodeTemplate(templateBodyJSON []byte, compressedPayload []byte) (context BulkTemplateContext, entries int, err error) {
 
@@ -90,6 +96,23 @@ func BulkDecodeTemplate(templateBodyJSON []byte, compressedPayload []byte) (cont
 }
 
 // Data extraction routines
+func binExtractInt8(bin []byte) int8 {
+	return int8(bin[0])
+}
+func binExtractInt16(bin []byte) int16 {
+	var value int16
+	value = int16(bin[0])
+	value = value | (int16(bin[1]) << 8)
+	return value
+}
+func binExtractInt24(bin []byte) int32 {
+	value := int32(bin[0])
+	value = value | (int32(bin[1]) << 8)
+	msb := int8(bin[2])
+	msbSignExtended := int32(msb)
+	value = value | (msbSignExtended << 16)
+	return value
+}
 func binExtractInt32(bin []byte) int32 {
 	var value int32
 	value = int32(bin[0])
@@ -118,6 +141,16 @@ func binExtractString(bin []byte) string {
 		}
 	}
 	return s
+}
+func binExtractFloat16(bin []byte) float32 {
+	value := uint16(bin[0])
+	value = value | (uint16(bin[1]) << 8)
+	f16 := Float16(value)
+	return f16.Float32()
+}
+func binExtractFloat32(bin []byte) float32 {
+	bits := binary.LittleEndian.Uint32(bin)
+	return math.Float32frombits(bits)
 }
 func binExtractFloat64(bin []byte) float64 {
 	bits := binary.LittleEndian.Uint64(bin)
@@ -180,21 +213,56 @@ func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]inter
 				bodyJSON += str
 			} else {
 				strLen := len(str)
+				i, err2 := strconv.Atoi(str)
+				if err2 == nil && i > 0 {
+					strLen = i
+				}
 				bodyJSON += "\"" + binExtractString(bin[binOffset:binOffset+strLen]) + "\""
 				binOffset += strLen
 			}
 		case jsonxt.Number:
-			_, errInt := t.(jsonxt.Number).Int64()
+			numberType, errInt := t.(jsonxt.Number).Int64()
 			if errInt == nil {
-				bodyJSON += fmt.Sprintf("%d", binExtractInt32(bin[binOffset:binOffset+4]))
-				binOffset += 4
-			} else {
-				_, errFloat := t.(jsonxt.Number).Float64()
-				if errFloat == nil {
-					bodyJSON += fmt.Sprintf("%f", binExtractFloat64(bin[binOffset:binOffset+8]))
+				// Integer
+				switch numberType {
+				case 11:
+					bodyJSON += fmt.Sprintf("%d", binExtractInt8(bin[binOffset:binOffset+1]))
+					binOffset++
+				case 12:
+					bodyJSON += fmt.Sprintf("%d", binExtractInt16(bin[binOffset:binOffset+2]))
+					binOffset += 2
+				case 13:
+					bodyJSON += fmt.Sprintf("%d", binExtractInt24(bin[binOffset:binOffset+3]))
+					binOffset += 3
+				case 1:
+					fallthrough
+				case 14:
+					bodyJSON += fmt.Sprintf("%d", binExtractInt32(bin[binOffset:binOffset+4]))
+					binOffset += 4
+				case 18:
+					bodyJSON += fmt.Sprintf("%d", binExtractInt64(bin[binOffset:binOffset+8]))
 					binOffset += 8
-				} else {
+				default:
 					bodyJSON += "0"
+				}
+			} else {
+				numberType, errFloat := t.(jsonxt.Number).Float64()
+				if errFloat != nil {
+					bodyJSON += "0"
+				} else {
+					// Real
+					if isPointOne(numberType, 12) {
+						bodyJSON += fmt.Sprintf("%g", binExtractFloat16(bin[binOffset:binOffset+2]))
+						binOffset += 2
+					} else if isPointOne(numberType, 14) {
+						bodyJSON += fmt.Sprintf("%g", binExtractFloat32(bin[binOffset:binOffset+4]))
+						binOffset += 4
+					} else if isPointOne(numberType, 18) || isPointOne(numberType, 1) {
+						bodyJSON += fmt.Sprintf("%g", binExtractFloat64(bin[binOffset:binOffset+8]))
+						binOffset += 8
+					} else {
+						bodyJSON += "0"
+					}
 				}
 			}
 		case bool:
@@ -285,21 +353,51 @@ func parseTemplate(context *BulkTemplateContext) (err error) {
 				debugf("TEMPLATE string %s\n", str)
 			}
 			if !strings.HasPrefix(str, "\"") {
-				binLength += len(fmt.Sprintf("%s", t))
+				i, err2 := strconv.Atoi(str)
+				if err2 == nil && i > 0 {
+					binLength += i
+				} else {
+					binLength += len(str)
+				}
 			}
 		case jsonxt.Number:
 			if debugJSONBin {
 				debugf("TEMPLATE number\n")
 			}
-			_, errInt := t.(jsonxt.Number).Int64()
+			numberType, errInt := t.(jsonxt.Number).Int64()
 			if errInt == nil {
-				binLength += 4 // int32
+				// Integer
+				switch numberType {
+				case 11:
+					binLength++
+				case 12:
+					binLength += 2
+				case 13:
+					binLength += 3
+				case 1:
+					fallthrough
+				case 14:
+					binLength += 4
+				case 18:
+					binLength += 8
+				default:
+					err = fmt.Errorf("unrecognized JSON integer type")
+				}
 			} else {
-				_, errFloat := t.(jsonxt.Number).Float64()
-				if errFloat == nil {
-					binLength += 8 // float64
-				} else {
+				numberType, errFloat := t.(jsonxt.Number).Float64()
+				if errFloat != nil {
 					err = fmt.Errorf("unrecognized JSON number")
+				} else {
+					// Real
+					if isPointOne(numberType, 12) {
+						binLength += 2
+					} else if isPointOne(numberType, 14) {
+						binLength += 4
+					} else if isPointOne(numberType, 18) || isPointOne(numberType, 1) {
+						binLength += 8
+					} else {
+						err = fmt.Errorf("unrecognized JSON real number type")
+					}
 				}
 			}
 		case bool:

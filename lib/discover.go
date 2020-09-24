@@ -56,23 +56,6 @@ func HubDiscover(deviceUID string, deviceSN string, productUID string) (hubSessi
 
 }
 
-// Get the hub endpoint ID
-func hubGetEndpointID() (hubEndpointID string, err error) {
-
-	if fnDiscover == nil {
-		return "", fmt.Errorf("no discovery function is available")
-	}
-
-	// Call the discover func
-	discinfo, err := fnDiscover("", "", "", "*")
-	if err != nil {
-		return "", fmt.Errorf("error from discovery handler: %s", err)
-	}
-
-	return discinfo.HubEndpointID, nil
-
-}
-
 // HubDiscover calls the discover function, and return discovery info
 func hubProcessDiscoveryRequest(deviceUID string, deviceSN string, productUID string, hostname string) (info DiscoverInfo, err error) {
 

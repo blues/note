@@ -1248,6 +1248,29 @@ func (box *Notebox) GetNote(notefileID string, noteID string) (note note.Note, e
 
 }
 
+// addNote adds a new note to a notefile but rejects attempts to add more than 100 notes
+func (box *Notebox) addNoteLimited(endpointID string, notefileID string, noteID string, note note.Note) (err error) {
+
+	openfile, file, err := box.OpenNotefile(notefileID)
+	if err != nil {
+		return err
+	}
+
+	notes := file.CountNotes(false)
+	notesMax := 100
+	if notes >= notesMax {
+		openfile.Close()
+		return fmt.Errorf("a maximum of %d notes may be pending for device (currently %d)", notesMax, notes)
+	}
+
+	err = file.AddNote(endpointID, noteID, note)
+
+	openfile.Close()
+
+	return err
+
+}
+
 // AddNote adds a new note to a notefile, which is a VERY common operation
 func (box *Notebox) AddNote(endpointID string, notefileID string, noteID string, note note.Note) (err error) {
 

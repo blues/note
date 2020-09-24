@@ -110,6 +110,7 @@ type HubSessionContext struct {
 	HubEndpointID    string
 	HubSessionTicket string
 	Transactions     int
+	EventsRouted     int
 	EventQ           *chan HubSessionEvent
 	LatestUpdated    bool
 	Latest           *map[string]note.Event
@@ -128,7 +129,7 @@ type HubSessionContext struct {
 
 // HubSessionEvent is an event queue entry, containing everything necessary to process an event
 type HubSessionEvent struct {
-	Session HubSessionContext
+	Session *HubSessionContext
 	Local   bool
 	File    Notefile
 	Event   note.Event

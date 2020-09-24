@@ -146,7 +146,11 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		if req.Body != nil {
 			xnote.Body = *req.Body
 		}
-		err = box.AddNote(endpointID, req.NotefileID, req.NoteID, xnote)
+		if req.Allow {
+			err = box.AddNote(endpointID, req.NotefileID, req.NoteID, xnote)
+		} else {
+			err = box.addNoteLimited(endpointID, req.NotefileID, req.NoteID, xnote)
+		}
 		if err != nil {
 			rsp.Err = fmt.Sprintf("%s", err)
 			break
@@ -349,9 +353,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 					break
 				}
 			}
-
-			// Update the environment vars for the notebox, which may result in a changed _env.dbs
-			hubUpdateEnvVars(box)
 
 			// Get the changed notefiles for that tracker
 			notefiles, err = box.GetChangedNotefiles(req.TrackerID)

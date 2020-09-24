@@ -18,7 +18,7 @@ import (
 var serverSupportsTLS bool
 
 // NoteboxInitFunc is the func to initialize the notebox at the start of a session
-type NoteboxInitFunc func(box *Notebox) (err error)
+type NoteboxInitFunc func(box *Notebox, deviceUID string, appUID string) (err error)
 
 var fnNoteboxUpdateEnv NoteboxInitFunc
 
@@ -28,9 +28,9 @@ func HubSetNoteboxInit(fn NoteboxInitFunc) {
 }
 
 // Update the environment variables for an open notebox
-func hubUpdateEnvVars(box *Notebox) {
+func hubUpdateEnvVars(box *Notebox, deviceUID string, appUID string) {
 	if fnNoteboxUpdateEnv != nil {
-		fnNoteboxUpdateEnv(box)
+		fnNoteboxUpdateEnv(box, deviceUID, appUID)
 	}
 }
 
@@ -833,7 +833,7 @@ func hubNotefileUpdateChangeTracker(session *HubSessionContext, req notehubMessa
 func hubNoteboxSummary(session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
 
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, appUID, err2 := openHubNoteboxForDevice(session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
 	if err2 != nil {
 		err = err2
 		return
@@ -849,8 +849,11 @@ func hubNoteboxSummary(session *HubSessionContext, req notehubMessage, rsp *note
 		rsp.SessionIDMismatch = true
 	}
 
+	// Set the notification context
+	box.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
+
 	// Update the environment vars for the notebox, which may result in a changed _env.dbs
-	hubUpdateEnvVars(box)
+	hubUpdateEnvVars(box, req.DeviceUID, appUID)
 
 	// Get the info
 	fileChanges, err4 := box.GetChangedNotefiles(req.DeviceEndpointID)
