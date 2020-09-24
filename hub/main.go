@@ -25,20 +25,24 @@ var serverHTTPReqTopic string
 // Main service entry point
 func main() {
 
-	// Get our server address and ports
-	rsp, err := http.Get("http://checkip.amazonaws.com")
-	if err != nil {
-		fmt.Printf("can't get our own IP address: %s", err)
-		return
+	// If not specified on the command line, get our server address and ports
+	if len(os.Args) < 2 {
+		rsp, err := http.Get("http://checkip.amazonaws.com")
+		if err != nil {
+			fmt.Printf("can't get our own IP address: %s", err)
+			return
+		}
+		defer rsp.Body.Close()
+		var buf []byte
+		buf, err = ioutil.ReadAll(rsp.Body)
+		if err != nil {
+			fmt.Printf("error fetching IP addr: %s", err)
+			return
+		}
+		serverAddress = string(bytes.TrimSpace(buf))
+	} else {
+		serverAddress = os.Args[1]
 	}
-	defer rsp.Body.Close()
-	var buf []byte
-	buf, err = ioutil.ReadAll(rsp.Body)
-	if err != nil {
-		fmt.Printf("error fetching IP addr: %s", err)
-		return
-	}
-	serverAddress = string(bytes.TrimSpace(buf))
 	serverHTTPReqTopic := "/req"
 	serverPortHTTP := ":80"
 	serverPortTCP = ":8081"
