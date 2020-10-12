@@ -304,9 +304,40 @@ func autoPurge() {
 	}
 }
 
-// Checkpoint all noteboxes and purge closed noteboxes
+// Checkpoint all noteboxes and purge noteboxes that have been sitting unused for the autopurge interval
 func Checkpoint() (err error) {
 	return checkpointAllNoteboxes(true)
+}
+
+// Purge checkpoints all noteboxes and force a purge of notefiles
+func Purge() (err error) {
+	var firstError error
+
+	// Lock the world
+	boxLock.Lock()
+
+	// Iterate, checkpointing each open notebox.
+	for boxStorage, boxi := range openboxes {
+
+		box := &Notebox{}
+		box.instance = boxi
+
+		emptyBox, err := box.uCheckpoint(true, true, true)
+		if firstError == nil {
+			firstError = err
+		}
+
+		// If we're purging, get rid of the notefile if it wasn't in use
+		if emptyBox {
+			delete(openboxes, boxStorage)
+		}
+
+	}
+
+	// Done
+	boxLock.Unlock()
+	return firstError
+
 }
 
 // checkpointAllNoteboxes ensures that what's on-disk is up to date
