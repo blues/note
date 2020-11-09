@@ -45,5 +45,8 @@ message NotehubPB {
     optional int32 Voltage100 = 35;
     optional int32 Temp100 = 36;
     optional bool ContinuousSession = 37;
+    optional int64 MotionSecs = 38;
+    optional string MotionOrientation = 39;
+
 }
 

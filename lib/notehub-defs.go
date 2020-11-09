@@ -90,6 +90,8 @@ type notehubMessage struct {
 	Voltage100                     int32  `json:"V,omitempty"`
 	Temp100                        int32  `json:"T,omitempty"`
 	ContinuousSession              bool   `json:"Z,omitempty"`
+	MotionSecs                     int64  `json:"M,omitempty"`
+	MotionOrientation              string `json:"O,omitempty"`
 }
 
 // HubSessionContext are the fields that are coordinated between the client and

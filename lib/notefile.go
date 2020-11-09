@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/blues/note-go/note"
+	olc "github.com/google/open-location-code/go"
 	"github.com/google/uuid"
 )
 
@@ -335,6 +336,14 @@ func (nf *Notefile) event(local bool, NoteID string) {
 		histories := *xnote.Histories
 		event.When = histories[0].When
 		event.Where = histories[0].Where
+		if event.Where != "" {
+			// Don't set WhereWhen because we don't actually know
+			// when the GPS was updated because we don't pass it in.
+			area, err := olc.Decode(event.Where)
+			if err == nil {
+				event.WhereLat, event.WhereLon = area.Center()
+			}
+		}
 	}
 
 	// Clean the event in case it's a queue event
