@@ -15,6 +15,7 @@ notelib.NotehubPB.HubSessionTicket max_size:128
 notelib.NotehubPB.DeviceSN max_size:250
 notelib.NotehubPB.NoteID max_size:100
 notelib.NotehubPB.CellID max_size:100
+notelib.NotehubPB.MotionOrientation max_size:100
 
 
 

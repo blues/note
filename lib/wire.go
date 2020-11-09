@@ -22,7 +22,7 @@ import (
 const jc0 = byte(0) // no compression
 const jc1 = byte(1) // replace the 5 json strings
 const jc2 = byte(2) // replace the 5 json strings, then apply Snappy
-const jc3 = byte(3) // json string subst table at top, replace the 5 json strings, then apply Snappy
+const jc3 = byte(3) // json string subst table at top, replace the 5 or 6 json strings, then apply Snappy
 const jcCurrent = jc3
 
 // JSON compression strings
@@ -31,6 +31,7 @@ const from4 = "},\""
 const from5 = "\":"
 const from6 = ",\""
 const from7 = "}}"
+const from8 = "true"
 const to1 = "\001"
 const to2 = "\002"
 const to3 = "\003"
@@ -38,6 +39,7 @@ const to4 = "\004"
 const to5 = "\005"
 const to6 = "\006"
 const to7 = "\007"
+const to8 = "\010"
 
 // Debug
 var debugWireRead = false
@@ -113,7 +115,8 @@ func scanForJSONValue(buf []byte, field string) (tokenBuf []byte) {
 	return
 }
 
-// Compress a byte array known to contain JSON
+// Compress a byte array known to contain JSON.  Note that we don't do any compression
+// beyond 07 because old firmware doesn't support it.
 func jsonCompress(normal []byte) (compressed []byte, err error) {
 
 	// Begin generating output by using header byte specifying what kind of compression.
@@ -206,7 +209,7 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 
 }
 
-// Decompress a byte array known to contain JSON
+// Decompress a byte array known to contain JSON.  Note that we support 08 as of 11/01/2020.
 func jsonDecompress(compressed []byte) (normal []byte, err error) {
 	normal = []byte{}
 
@@ -280,6 +283,7 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 		str := string(sdecompressed)
 
 		// Perform the hard-wired substitutions
+		str = strings.Replace(str, to8, from8, -1)
 		str = strings.Replace(str, to7, from7, -1)
 		str = strings.Replace(str, to6, from6, -1)
 		str = strings.Replace(str, to5, from5, -1)
@@ -299,6 +303,7 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 	} else {
 
 		str := string(sdecompressed)
+		str = strings.Replace(str, to8, from8, -1)
 		str = strings.Replace(str, to7, from7, -1)
 		str = strings.Replace(str, to6, from6, -1)
 		str = strings.Replace(str, to5, from5, -1)
@@ -719,6 +724,12 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.UsageSentNotes != 0 {
 		pb.UsageSentNotes = &msg.UsageSentNotes
 	}
+	if msg.MotionSecs != 0 {
+		pb.MotionSecs = &msg.MotionSecs
+	}
+	if msg.MotionOrientation != "" {
+		pb.MotionOrientation = &msg.MotionOrientation
+	}
 
 	// Create the binary object
 	if msg.cf == nil {
@@ -959,6 +970,8 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.Session.Rat = rat
 	session.Session.Voltage = float64(req.Voltage100) / 100
 	session.Session.Temp = float64(req.Temp100) / 100
+	session.Session.Moved = req.MotionSecs
+	session.Session.Orientation = req.MotionOrientation
 	session.Notification = req.NotificationSession
 	session.Session.ContinuousSession = req.ContinuousSession
 	session.Session.ScanResults = req.nf.Payload
@@ -1044,6 +1057,8 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.UsageRcvdNotes = pb.GetUsageRcvdNotes()
 	msg.UsageSentNotes = pb.GetUsageSentNotes()
 	msg.CellID = pb.GetCellID()
+	msg.MotionSecs = pb.GetMotionSecs()
+	msg.MotionOrientation = pb.GetMotionOrientation()
 
 	// Validate the PB
 	binaryLengthExpected := pb.GetBytes1() + pb.GetBytes2() + pb.GetBytes3() + pb.GetBytes4()
