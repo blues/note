@@ -1,7 +1,5 @@
-github.com/blues/note-go v1.3.9 h1:vrPRD5fihBUqAHJgQ8t7zVOJNUaWHtAE0po47stsIcY=
-github.com/blues/note-go v1.3.9/go.mod h1:R19ngRomhR+SFsDV5eAd1F6MvIre1fxd1PuwXi2FmSw=
-github.com/blues/note-go v1.4.0 h1:qDTL527RovZrMPtkNAZP849eZ8hTIwA8gMy0tXq4H5I=
-github.com/blues/note-go v1.4.0/go.mod h1:R19ngRomhR+SFsDV5eAd1F6MvIre1fxd1PuwXi2FmSw=
+github.com/blues/note-go v1.4.2 h1:7zvnpW6Q+C85d5o9lWa+oEk7OVYTTStt+wLZTQf0SpU=
+github.com/blues/note-go v1.4.2/go.mod h1:R19ngRomhR+SFsDV5eAd1F6MvIre1fxd1PuwXi2FmSw=
 github.com/creack/goselect v0.1.1 h1:tiSSgKE1eJtxs1h/VgGQWuXUP0YS4CDIFMp6vaI1ls0=
 github.com/creack/goselect v0.1.1/go.mod h1:a/NhLweNvqIYMuxcMOuWY516Cimucms3DglDzQP3hKY=
 github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
