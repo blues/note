@@ -47,6 +47,7 @@ message NotehubPB {
     optional bool ContinuousSession = 37;
     optional int64 MotionSecs = 38;
     optional string MotionOrientation = 39;
+    optional string SessionTrigger = 40;
 
 }
 

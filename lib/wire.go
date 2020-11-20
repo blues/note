@@ -730,6 +730,9 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.MotionOrientation != "" {
 		pb.MotionOrientation = &msg.MotionOrientation
 	}
+	if msg.SessionTrigger != "" {
+		pb.SessionTrigger = &msg.SessionTrigger
+	}
 
 	// Create the binary object
 	if msg.cf == nil {
@@ -972,6 +975,7 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.Session.Temp = float64(req.Temp100) / 100
 	session.Session.Moved = req.MotionSecs
 	session.Session.Orientation = req.MotionOrientation
+	session.Session.Trigger = req.SessionTrigger
 	session.Notification = req.NotificationSession
 	session.Session.ContinuousSession = req.ContinuousSession
 	session.Session.ScanResults = req.nf.Payload
@@ -1059,6 +1063,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.CellID = pb.GetCellID()
 	msg.MotionSecs = pb.GetMotionSecs()
 	msg.MotionOrientation = pb.GetMotionOrientation()
+	msg.SessionTrigger = pb.GetSessionTrigger()
 
 	// Validate the PB
 	binaryLengthExpected := pb.GetBytes1() + pb.GetBytes2() + pb.GetBytes3() + pb.GetBytes4()
