@@ -3,7 +3,7 @@ module github.com/blues/note
 go 1.12
 
 require (
-	github.com/blues/note-go v1.4.2
+	github.com/blues/note-go v1.4.3
 	github.com/golang/protobuf v1.3.2
 	github.com/golang/snappy v0.0.1
 	github.com/google/open-location-code/go v0.0.0-20200929001750-55940b489b0e
