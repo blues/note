@@ -128,6 +128,8 @@ type HubSessionContext struct {
 	CachedWhereLocation string
 	CachedWhereCountry  string
 	CachedWhereTimeZone string
+	// URL for routing of events to a device-specified service
+	DeviceRouteURL string
 }
 
 // HubSessionEvent is an event queue entry, containing everything necessary to process an event
