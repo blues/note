@@ -275,11 +275,9 @@ func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]inter
 		}
 	}
 
-	// Unmarshal into an object.  Note that we must use the json package rather than the
-	// note.JSONUnmarshal because we need to unmarshal into values that are NOT of a
-	// "jsonNumber" data type, because omitempty doesn't (yet) handle that type
+	// Unmarshal and remove empty fields
 	jsonObj := map[string]interface{}{}
-	if json.Unmarshal([]byte(bodyJSON), &jsonObj) == nil {
+	if note.JSONUnmarshal([]byte(bodyJSON), &jsonObj) == nil {
 		jsonObj = omitempty(jsonObj)
 	}
 
@@ -296,6 +294,14 @@ func omitempty(in map[string]interface{}) (out map[string]interface{}) {
 	out = in
 	for key, value := range in {
 		switch value.(type) {
+		case json.Number:
+			valueAsInt64, err := value.(json.Number).Int64()
+			if err == nil && valueAsInt64 == 0 {
+				valueAsFloat64, err := value.(json.Number).Float64()
+				if err == nil && valueAsFloat64 == 0 {
+					delete(out, key)
+				}
+			}
 		case float64:
 			if value == 0.0 {
 				delete(out, key)

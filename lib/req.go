@@ -463,7 +463,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			showTotalOnly = true
 			updateTracker = false
 			req.TrackerID = ReservedIDDelimiter
-			break
 		}
 
 		// Make sure that it's a valid tracker in that it's not one of our known endpoints
@@ -480,7 +479,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		}
 
 		// If the flag was set, clear the tracker to make sure we get all notes
-		if req.Start && updateTracker {
+		if (req.Start || req.Reset) && updateTracker {
 			file.ClearTracker(req.TrackerID)
 		}
 
