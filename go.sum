@@ -1,9 +1,5 @@
-github.com/blues/note-go v1.4.2 h1:7zvnpW6Q+C85d5o9lWa+oEk7OVYTTStt+wLZTQf0SpU=
-github.com/blues/note-go v1.4.2/go.mod h1:R19ngRomhR+SFsDV5eAd1F6MvIre1fxd1PuwXi2FmSw=
-github.com/blues/note-go v1.4.3 h1:DZLDeD+nENf1smBQLPR3g/0u3wXCoUZeC/R3MTpdltU=
-github.com/blues/note-go v1.4.3/go.mod h1:WC/fU803bbKAmJNxf5cXqRkqjq377t+WThclC67tqkk=
-github.com/blues/note-go v1.4.4 h1:YDkJPrTm6RtoIBQrmVo5tJS8gUpSELKsMw33k2ULCYk=
-github.com/blues/note-go v1.4.4/go.mod h1:WC/fU803bbKAmJNxf5cXqRkqjq377t+WThclC67tqkk=
+github.com/blues/note-go v1.4.5 h1:w6hEZhwyfSCe67Y7LnfsfGV/cOtZX+Da41+EYF5xjh8=
+github.com/blues/note-go v1.4.5/go.mod h1:WC/fU803bbKAmJNxf5cXqRkqjq377t+WThclC67tqkk=
 github.com/creack/goselect v0.1.1 h1:tiSSgKE1eJtxs1h/VgGQWuXUP0YS4CDIFMp6vaI1ls0=
 github.com/creack/goselect v0.1.1/go.mod h1:a/NhLweNvqIYMuxcMOuWY516Cimucms3DglDzQP3hKY=
 github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
