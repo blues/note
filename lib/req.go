@@ -60,7 +60,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			break
 		}
 		for notefileID, notefileInfo := range *req.FileInfo {
-			if !NotefileIDIsReserved(notefileID) {
+			if !NotefileIDIsReservedWithExceptions(notefileID) {
 				err = box.AddNotefile(notefileID, &notefileInfo)
 				if err != nil && rsp.Err == "" {
 					rsp.Err = fmt.Sprintf("error adding notefile: %s", err)
@@ -81,7 +81,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		}
 		deleteFiles := *req.Files
 		for i := range deleteFiles {
-			if !NotefileIDIsReserved(deleteFiles[i]) {
+			if !NotefileIDIsReservedWithExceptions(deleteFiles[i]) {
 				err = box.DeleteNotefile(deleteFiles[i])
 				if err != nil && rsp.Err == "" {
 					rsp.Err = fmt.Sprintf("error deleting %s: %s", deleteFiles[i], err)
@@ -110,7 +110,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 
 		}
 		// Make sure that the file exists
-		if NotefileIDIsReserved(req.NotefileID) {
+		if NotefileIDIsReservedWithExceptions(req.NotefileID) {
 			rsp.Err = "reserved notefile name"
 			break
 		}
@@ -161,7 +161,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			rsp.Err = "no notefile specified"
 			break
 		}
-		if NotefileIDIsReserved(req.NotefileID) {
+		if NotefileIDIsReservedWithExceptions(req.NotefileID) {
 			rsp.Err = "reserved notefile name"
 			break
 		}
@@ -216,7 +216,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			rsp.Err = "no notefile specified"
 			break
 		}
-		if NotefileIDIsReserved(req.NotefileID) {
+		if NotefileIDIsReservedWithExceptions(req.NotefileID) {
 			rsp.Err = "reserved notefile name"
 			break
 		}
@@ -387,8 +387,17 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			if notefileID == box.EndpointID() {
 				continue
 			}
-			if NotefileIDIsReserved(notefileID) {
-				continue
+
+			// If we're getting a list of all notefiles, skip the reserved notefiles
+			// entirely.  Otherwise, if we have a tracker, allow the exceptions.
+			if tracker == ReservedIDDelimiter {
+				if NotefileIDIsReserved(notefileID) && !req.Allow {
+					continue
+				}
+			} else {
+				if NotefileIDIsReservedWithExceptions(notefileID) && !req.Allow {
+					continue
+				}
 			}
 
 			// Get the number of pending changes.  Note that if we didn't supply a tracker,
@@ -468,6 +477,10 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		// Make sure that it's a valid tracker in that it's not one of our known endpoints
 		if req.TrackerID == note.DefaultDeviceEndpointID || req.TrackerID == note.DefaultHubEndpointID {
 			rsp.Err = fmt.Sprintf("cannot use this reserved tracker name: %s", req.TrackerID)
+			break
+		}
+		if NotefileIDIsReservedWithExceptions(req.NotefileID) && !req.Allow {
+			rsp.Err = fmt.Sprintf("reserved notefile name")
 			break
 		}
 
