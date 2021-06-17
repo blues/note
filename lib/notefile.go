@@ -922,6 +922,20 @@ func NotefileIDIsReserved(notefileID string) bool {
 		return true
 	}
 
+	// Underscore is our primary reserved character
+	return strings.HasPrefix(notefileID, "_")
+
+}
+
+// NotefileIDIsReservedWithExceptions returns true if the notefileID is reserved
+func NotefileIDIsReservedWithExceptions(notefileID string) bool {
+
+	// This character is blocked from being in a notefile name because we use it as a separator
+	// within the notebox
+	if strings.Contains(notefileID, ReservedIDDelimiter) {
+		return true
+	}
+
 	// Certain notefiles are explicitly allowed because we expect users to be messing inside them
 	if notefileID == note.TrackNotefile ||
 		notefileID == note.LogNotefile ||
