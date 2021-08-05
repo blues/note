@@ -38,61 +38,70 @@ const msgSignal = "s"
 
 // nf is the native format of these structures
 type nf struct {
-	Notefile  *Notefile               `json:"A,omitempty"`
-	Notefiles *map[string]Notefile    `json:"B,omitempty"`
-	Body      *map[string]interface{} `json:"C,omitempty"`
-	Payload   *[]byte                 `json:"D,omitempty"`
+	Notefile  *Notefile               `json:"A"`
+	Notefiles *map[string]Notefile    `json:"B"`
+	Body      *map[string]interface{} `json:"C"`
+	Payload   *[]byte                 `json:"D"`
 }
 
 // cf is the compressed format of these structures
 type cf struct {
-	Notefile  []byte `json:"E,omitempty"`
-	Notefiles []byte `json:"F,omitempty"`
-	Body      []byte `json:"G,omitempty"`
-	Payload   []byte `json:"H,omitempty"`
+	Notefile  []byte `json:"E"`
+	Notefiles []byte `json:"F"`
+	Body      []byte `json:"G"`
+	Payload   []byte `json:"H"`
 }
 
 // NotehubMessage is the data structure used both for requests and responses.
 // Note that this must be kept in perfect sync with the notehub protobuf definitions.
 type notehubMessage struct {
-	Version                        uint32 `json:"a,omitempty"`
-	MessageType                    string `json:"b,omitempty"`
-	Error                          string `json:"c,omitempty"`
-	DeviceUID                      string `json:"d,omitempty"`
-	DeviceEndpointID               string `json:"e,omitempty"`
-	HubTimeNs                      int64  `json:"f,omitempty"`
-	HubEndpointID                  string `json:"g,omitempty"`
-	HubSessionHandler              string `json:"h,omitempty"`
-	HubSessionTicket               string `json:"i,omitempty"`
-	HubSessionTicketExpiresTimeSec int64  `json:"j,omitempty"`
-	NotefileID                     string `json:"k,omitempty"`
-	NotefileIDs                    string `json:"l,omitempty"`
-	MaxChanges                     int32  `json:"m,omitempty"`
-	Since                          int64  `json:"n,omitempty"`
-	Until                          int64  `json:"o,omitempty"`
-	NoteID                         string `json:"q,omitempty"`
-	SessionIDPrev                  int64  `json:"r,omitempty"`
-	SessionIDNext                  int64  `json:"s,omitempty"`
-	SessionIDMismatch              bool   `json:"t,omitempty"`
-	ProductUID                     string `json:"u,omitempty"`
-	*nf                            `json:",omitempty"`
-	*cf                            `json:",omitempty"`
-	UsageProvisioned               int64  `json:"A,omitempty"`
-	UsageRcvdBytes                 uint32 `json:"B,omitempty"`
-	UsageSentBytes                 uint32 `json:"C,omitempty"`
-	UsageTCPSessions               uint32 `json:"D,omitempty"`
-	UsageTLSSessions               uint32 `json:"E,omitempty"`
-	UsageRcvdNotes                 uint32 `json:"F,omitempty"`
-	UsageSentNotes                 uint32 `json:"G,omitempty"`
-	DeviceSN                       string `json:"S,omitempty"`
-	CellID                         string `json:"I,omitempty"`
-	NotificationSession            bool   `json:"N,omitempty"`
-	Voltage100                     int32  `json:"V,omitempty"`
-	Temp100                        int32  `json:"T,omitempty"`
-	ContinuousSession              bool   `json:"Z,omitempty"`
-	MotionSecs                     int64  `json:"M,omitempty"`
-	MotionOrientation              string `json:"O,omitempty"`
-	SessionTrigger                 string `json:"P,omitempty"`
+	Version                        uint32
+	MessageType                    string
+	Error                          string
+	DeviceUID                      string
+	DeviceEndpointID               string
+	HubTimeNs                      int64
+	HubEndpointID                  string
+	HubSessionHandler              string
+	HubSessionFactoryResetID       string
+	HubSessionTicket               string
+	HubSessionTicketExpiresTimeSec int64
+	NotefileID                     string
+	NotefileIDs                    string
+	MaxChanges                     int32
+	Since                          int64
+	Until                          int64
+	NoteID                         string
+	SessionIDPrev                  int64
+	SessionIDNext                  int64
+	SessionIDMismatch              bool
+	ProductUID                     string
+	*nf                            `json:""`
+	*cf                            `json:""`
+	UsageProvisioned               int64
+	UsageRcvdBytes                 uint32
+	UsageSentBytes                 uint32
+	UsageTCPSessions               uint32
+	UsageTLSSessions               uint32
+	UsageRcvdNotes                 uint32
+	UsageSentNotes                 uint32
+	HighPowerSecsTotal             uint32
+	HighPowerSecsData              uint32
+	HighPowerSecsGPS               uint32
+	HighPowerCyclesTotal           uint32
+	HighPowerCyclesData            uint32
+	HighPowerCyclesGPS             uint32
+	DeviceSN                       string
+	CellID                         string
+	NotificationSession            bool
+	Voltage100                     int32
+	Temp100                        int32
+	Voltage1000                    int32
+	Temp1000                       int32
+	ContinuousSession              bool
+	MotionSecs                     int64
+	MotionOrientation              string
+	SessionTrigger                 string
 }
 
 // HubSessionContext are the fields that are coordinated between the client and
@@ -112,6 +121,7 @@ type HubSessionContext struct {
 	DeviceEndpointID string
 	HubEndpointID    string
 	HubSessionTicket string
+	FactoryResetID   string
 	Transactions     int
 	EventsRouted     int
 	EventQ           *chan HubSessionEvent
@@ -130,6 +140,8 @@ type HubSessionContext struct {
 	CachedWhereTimeZone string
 	// URL for routing of events to a device-specified service
 	DeviceRouteURL string
+	// For monitoring notefile changes
+	DeviceMonitorID int64
 }
 
 // HubSessionEvent is an event queue entry, containing everything necessary to process an event

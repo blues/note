@@ -28,12 +28,12 @@ func tcpsHandler() {
 	fmt.Printf("Serving requests on tcps:%s%s\n", serverAddress, serverPortTCPS)
 
 	// Load our certs
-	serviceCertFile, err := ioutil.ReadFile("tls/hub.crt")
+	serviceCertFile, err := ioutil.ReadFile("security/hub.crt")
 	if err != nil {
 		fmt.Printf("tcps: error reading hub certificate: %s\n", err)
 		return
 	}
-	serviceKeyFile, err := ioutil.ReadFile("tls/hub.key")
+	serviceKeyFile, err := ioutil.ReadFile("security/hub.key")
 	if err != nil {
 		fmt.Printf("tcps: error reading hub key: %s\n", err)
 		return
@@ -67,7 +67,7 @@ func tcpsHandler() {
 	tlsConfig.BuildNameToCertificate()
 	connServer, err := TLSListen("tcp", serverPortTCPS, tlsConfig)
 	if err != nil {
-		fmt.Errorf("tcps: error listening on port %s: %s", serverPortTCPS, err)
+		fmt.Printf("tcps: error listening on port %s: %s\n", serverPortTCPS, err)
 		return
 	}
 	defer connServer.Close()

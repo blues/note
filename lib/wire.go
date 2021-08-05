@@ -654,6 +654,9 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.HubSessionHandler != "" {
 		pb.HubSessionHandler = &msg.HubSessionHandler
 	}
+	if msg.HubSessionFactoryResetID != "" {
+		pb.HubSessionFactoryResetID = &msg.HubSessionFactoryResetID
+	}
 	if msg.HubSessionTicket != "" {
 		pb.HubSessionTicket = &msg.HubSessionTicket
 	}
@@ -700,6 +703,12 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.Temp100 != 0 {
 		pb.Temp100 = &msg.Temp100
 	}
+	if msg.Voltage1000 != 0 {
+		pb.Voltage1000 = &msg.Voltage1000
+	}
+	if msg.Temp1000 != 0 {
+		pb.Temp1000 = &msg.Temp1000
+	}
 	if msg.CellID != "" {
 		pb.CellID = &msg.CellID
 	}
@@ -723,6 +732,24 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	}
 	if msg.UsageSentNotes != 0 {
 		pb.UsageSentNotes = &msg.UsageSentNotes
+	}
+	if msg.HighPowerSecsTotal != 0 {
+		pb.HighPowerSecsTotal = &msg.HighPowerSecsTotal
+	}
+	if msg.HighPowerSecsData != 0 {
+		pb.HighPowerSecsData = &msg.HighPowerSecsData
+	}
+	if msg.HighPowerSecsGPS != 0 {
+		pb.HighPowerSecsGPS = &msg.HighPowerSecsGPS
+	}
+	if msg.HighPowerCyclesTotal != 0 {
+		pb.HighPowerCyclesTotal = &msg.HighPowerCyclesTotal
+	}
+	if msg.HighPowerCyclesData != 0 {
+		pb.HighPowerCyclesData = &msg.HighPowerCyclesData
+	}
+	if msg.HighPowerCyclesGPS != 0 {
+		pb.HighPowerCyclesGPS = &msg.HighPowerCyclesGPS
 	}
 	if msg.MotionSecs != 0 {
 		pb.MotionSecs = &msg.MotionSecs
@@ -955,6 +982,7 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.DeviceEndpointID = req.DeviceEndpointID
 	session.HubEndpointID = req.HubEndpointID
 	session.HubSessionTicket = req.HubSessionTicket
+	session.FactoryResetID = req.HubSessionFactoryResetID
 	session.Session.This.Since = req.UsageProvisioned
 	session.Session.This.RcvdBytes = req.UsageRcvdBytes
 	session.Session.This.SentBytes = req.UsageSentBytes
@@ -962,10 +990,20 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.Session.This.TLSSessions = req.UsageTLSSessions
 	session.Session.This.RcvdNotes = req.UsageRcvdNotes
 	session.Session.This.SentNotes = req.UsageSentNotes
+	session.Session.HighPowerSecsTotal = req.HighPowerSecsTotal
+	session.Session.HighPowerSecsData = req.HighPowerSecsData
+	session.Session.HighPowerSecsGPS = req.HighPowerSecsGPS
+	session.Session.HighPowerCyclesTotal = req.HighPowerCyclesTotal
+	session.Session.HighPowerCyclesData = req.HighPowerCyclesData
+	session.Session.HighPowerCyclesGPS = req.HighPowerCyclesGPS
 	var mcc, mnc, lac, cellid, rssi, sinr, rsrp, rsrq int
 	var rat string
 	fmt.Sscanf(req.CellID, "%d,%d,%d,%d,%d,%d,%d,%d,%s", &mcc, &mnc, &lac, &cellid, &rssi, &sinr, &rsrp, &rsrq, &rat)
-	session.Session.CellID = fmt.Sprintf("%d,%d,%d,%d", mcc, mnc, lac, cellid)
+	if req.CellID == "" || mcc == 0 {
+		session.Session.CellID = ""
+	} else {
+		session.Session.CellID = fmt.Sprintf("%d,%d,%d,%d", mcc, mnc, lac, cellid)
+	}
 	session.Session.Rssi = rssi
 	session.Session.Sinr = sinr
 	session.Session.Rsrp = rsrp
@@ -973,6 +1011,12 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.Session.Rat = rat
 	session.Session.Voltage = float64(req.Voltage100) / 100
 	session.Session.Temp = float64(req.Temp100) / 100
+	if req.Voltage1000 != 0 {
+		session.Session.Voltage = float64(req.Voltage1000) / 1000
+	}
+	if req.Temp1000 != 0 {
+		session.Session.Temp = float64(req.Temp1000) / 1000
+	}
 	session.Session.Moved = req.MotionSecs
 	session.Session.Orientation = req.MotionOrientation
 	session.Session.Trigger = req.SessionTrigger
@@ -1038,6 +1082,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.HubTimeNs = pb.GetHubTimeNs()
 	msg.HubEndpointID = pb.GetHubEndpointID()
 	msg.HubSessionHandler = pb.GetHubSessionHandler()
+	msg.HubSessionFactoryResetID = pb.GetHubSessionFactoryResetID()
 	msg.HubSessionTicket = pb.GetHubSessionTicket()
 	msg.HubSessionTicketExpiresTimeSec = pb.GetHubSessionTicketExpiresTimeSec()
 	msg.NotefileID = pb.GetNotefileID()
@@ -1053,6 +1098,8 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.ContinuousSession = pb.GetContinuousSession()
 	msg.Voltage100 = pb.GetVoltage100()
 	msg.Temp100 = pb.GetTemp100()
+	msg.Voltage1000 = pb.GetVoltage1000()
+	msg.Temp1000 = pb.GetTemp1000()
 	msg.UsageProvisioned = pb.GetUsageProvisioned()
 	msg.UsageRcvdBytes = pb.GetUsageRcvdBytes()
 	msg.UsageSentBytes = pb.GetUsageSentBytes()
@@ -1060,6 +1107,12 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.UsageTLSSessions = pb.GetUsageTLSSessions()
 	msg.UsageRcvdNotes = pb.GetUsageRcvdNotes()
 	msg.UsageSentNotes = pb.GetUsageSentNotes()
+	msg.HighPowerSecsTotal = pb.GetHighPowerSecsTotal()
+	msg.HighPowerSecsData = pb.GetHighPowerSecsData()
+	msg.HighPowerSecsGPS = pb.GetHighPowerSecsGPS()
+	msg.HighPowerCyclesTotal = pb.GetHighPowerCyclesTotal()
+	msg.HighPowerCyclesData = pb.GetHighPowerCyclesData()
+	msg.HighPowerCyclesGPS = pb.GetHighPowerCyclesGPS()
 	msg.CellID = pb.GetCellID()
 	msg.MotionSecs = pb.GetMotionSecs()
 	msg.MotionOrientation = pb.GetMotionOrientation()

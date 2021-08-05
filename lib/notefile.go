@@ -343,6 +343,9 @@ func (nf *Notefile) event(local bool, NoteID string) {
 			if err == nil {
 				event.WhereLat, event.WhereLon = area.Center()
 			}
+			// If Where really is specified, then the When of the Where is the closest date that we have
+			// which is the captured date of the note.
+			event.WhereWhen = event.When
 		}
 	}
 
@@ -557,6 +560,7 @@ func (nf *Notefile) uDeleteNote(endpointID string, noteID string, xnote *note.No
 	// If this is a queue, do an automatic purge
 	if nf.Queue {
 		delete(nf.Notes, noteID)
+		nf.modCount++
 		return
 	}
 

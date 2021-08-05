@@ -48,6 +48,15 @@ message NotehubPB {
     optional int64 MotionSecs = 38;
     optional string MotionOrientation = 39;
     optional string SessionTrigger = 40;
+    optional int32 Voltage1000 = 41;
+    optional int32 Temp1000 = 42;
+    optional string HubSessionFactoryResetID = 43;
+    optional uint32 HighPowerSecsTotal = 44;
+    optional uint32 HighPowerSecsData = 45;
+    optional uint32 HighPowerSecsGPS = 46;
+    optional uint32 HighPowerCyclesTotal = 47;
+    optional uint32 HighPowerCyclesData = 48;
+    optional uint32 HighPowerCyclesGPS = 49;
 
 }
 

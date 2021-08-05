@@ -17,6 +17,7 @@ notelib.NotehubPB.NoteID max_size:100
 notelib.NotehubPB.CellID max_size:100
 notelib.NotehubPB.MotionOrientation max_size:100
 notelib.NotehubPB.SessionTrigger max_size:250
+notelib.NotehubPB.HubSessionFactoryResetID max_size:100
 
 
 

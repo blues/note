@@ -165,6 +165,13 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			rsp.Err = "reserved notefile name"
 			break
 		}
+		if !box.NotefileExists(req.NotefileID) {
+			err = box.AddNotefile(req.NotefileID, nil)
+			if err != nil {
+				rsp.Err = fmt.Sprintf("%s", err)
+				break
+			}
+		}
 		if req.NoteID == "" {
 			rsp.Err = "no note ID specified"
 			break
@@ -549,7 +556,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			infolist[noteIDs[i]] = info
 
 			// Delete it as a side-effect, if desired
-			if req.Delete && !xnote.Deleted {
+			if req.Delete {
 				file.DeleteNote(endpointID, noteIDs[i])
 			}
 
