@@ -5,6 +5,7 @@
 package main
 
 import (
+	"io/ioutil"
 	"time"
 
 	"github.com/blues/note-go/note"
@@ -30,6 +31,12 @@ func NotehubDiscover(deviceUID string, deviceSN string, productUID string, hostn
 		info.HubSessionTicketExpiresTimeNs = device.TicketExpiresTimeSec * int64(1000000000)
 		info.HubDeviceStorageObject = notelib.FileStorageObject(deviceUID)
 		info.HubDeviceAppUID = device.AppUID
+	}
+
+	// Return the tcps issuer rootca cert, used for device-side certificate rotation
+	serviceCertFile, err2 := ioutil.ReadFile("security/root.crt")
+	if err2 == nil {
+		info.HubCert = serviceCertFile
 	}
 
 	// Done

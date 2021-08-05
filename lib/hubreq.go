@@ -35,7 +35,7 @@ func hubUpdateEnvVars(box *Notebox, deviceUID string, appUID string) {
 }
 
 // GetNotificationFunc retrieves hub notifications to be sent to client
-type GetNotificationFunc func(deviceUID string, productUID string) (notifications []string, err error)
+type GetNotificationFunc func(deviceMonitorID int64) (notifications []string)
 
 var fnHubNotifications GetNotificationFunc
 
@@ -55,7 +55,7 @@ func HubSetReadFile(fn ReadFileFunc) {
 }
 
 // WebRequestFunc performs a web request on behalf of a device
-type WebRequestFunc func(deviceUID string, productUID string, alias string, reqtype string, target string, bodyJSON []byte, payload []byte, session *HubSessionContext) (rspstatuscode int, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
+type WebRequestFunc func(deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqmaxbytes uint, target string, bodyJSON []byte, payload []byte, session *HubSessionContext) (rspstatuscode int, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
 
 var fnHubWebRequest WebRequestFunc
 
@@ -172,31 +172,39 @@ func HubRequest(session *HubSessionContext, content []byte, event EventFunc, con
 
 		session.Active = true
 
-		// Return info to the client about itself
+		// Return info to the client about its position and timezone.  Prefer to use Tower because
+		// it may be more up-to-date than the triangulated position, but if it's not available (such
+		// as is the case on WiFi) then use the last known triangulated position.
+		lastKnownLocation := note.TowerLocation{}
 		if session.Session.Tower.OLC != "" {
+			lastKnownLocation = session.Session.Tower
+		} else if session.Session.Tri.OLC != "" {
+			lastKnownLocation = session.Session.Tri
+		}
+		if lastKnownLocation.OLC != "" {
 
 			// Load the location to compute cell offset, if possible
 			shortZone := ""
 			offsetSecondsEastOfUTC := 0
-			location, err := time.LoadLocation(session.Session.Tower.TimeZone)
+			location, err := time.LoadLocation(lastKnownLocation.TimeZone)
 			if err != nil {
-				fmt.Printf("*** Can't load location for: %s\n", session.Session.Tower.TimeZone)
+				fmt.Printf("*** Can't load location for: %s\n", lastKnownLocation.TimeZone)
 			} else {
 				localTime := time.Now().In(location)
 				shortZone, offsetSecondsEastOfUTC = localTime.Zone()
 			}
 
 			// Return everything packed into the CellID field
-			rsp.CellID = session.Session.Tower.OLC
-			rsp.CellID += "|" + session.Session.Tower.CountryCode
-			rsp.CellID += "|" + session.Session.Tower.TimeZone
+			rsp.CellID = lastKnownLocation.OLC
+			rsp.CellID += "|" + lastKnownLocation.CountryCode
+			rsp.CellID += "|" + lastKnownLocation.TimeZone
 			rsp.CellID += "|" + shortZone
 			if shortZone != "" {
 				rsp.CellID += "|" + fmt.Sprintf("%d", offsetSecondsEastOfUTC/60)
 			} else {
 				rsp.CellID += "|"
 			}
-			rsp.CellID += "|" + session.Session.Tower.Name
+			rsp.CellID += "|" + lastKnownLocation.Name
 
 		}
 
@@ -266,7 +274,7 @@ func processRequest(session *HubSessionContext, req notehubMessage, event EventF
 		// This is a nil transaction
 
 	case msgPing:
-		// This is a nil transaction
+		rsp.HubTimeNs = time.Now().UnixNano()
 
 	case msgPingLegacy:
 		// This is a nil transaction
@@ -402,8 +410,10 @@ func hubWebRequest(session *HubSessionContext, req notehubMessage, rsp *notehubM
 	}
 	reqtype := req.NotefileID
 	if reqtype == "" {
-		return fmt.Errorf("web request requires POST, PUT, or GET")
+		return fmt.Errorf("web request requires a method")
 	}
+	reqcontent := req.MotionOrientation
+	reqmaxbytes := uint(req.MotionSecs)
 	target := req.NotefileIDs
 
 	// Unpack the notefile that contains the special note
@@ -419,10 +429,10 @@ func hubWebRequest(session *HubSessionContext, req notehubMessage, rsp *notehubM
 	notefile.Close()
 
 	// Perform the web request
-	statuscode, rspBodyJSON, rspPayload, err := fnHubWebRequest(req.DeviceUID, req.ProductUID, alias, reqtype, target, snote.GetBody(), snote.Payload, session)
+	statuscode, rspBodyJSON, rspPayload, err := fnHubWebRequest(req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqmaxbytes, target, snote.GetBody(), snote.Payload, session)
 
 	if err != nil {
-		rspBodyJSON = []byte(fmt.Sprintf("{\"err\":\"%s\"}", err))
+		rsp.Error = fmt.Sprintf("%s", err)
 	}
 
 	// Place the web response back into the special notefile
@@ -477,17 +487,21 @@ func hubSignal(session *HubSessionContext, req notehubMessage, rsp *notehubMessa
 
 // Get Notification message
 func hubGetNotification(session *HubSessionContext, msg notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+
+	// These conditions should never happen
 	if fnHubNotifications == nil {
 		return fmt.Errorf("no notification handler has been set " + note.ErrHubNoHandler)
 	}
 	if !session.Notification {
 		return fmt.Errorf("this transaction is not allowed on normal sessions used for request I/O")
 	}
-	var changes []string
-	changes, err = fnHubNotifications(msg.DeviceUID, msg.ProductUID)
-	if err != nil {
-		return
+	if session.DeviceMonitorID == 0 {
+		return fmt.Errorf("device monitoring is not active")
 	}
+
+	// Get the changes pending
+	var changes []string
+	changes = fnHubNotifications(session.DeviceMonitorID)
 
 	// Turn the changes into a payload
 	payload := []byte(strings.Join(changes, "\n"))
