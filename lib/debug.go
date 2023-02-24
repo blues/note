@@ -109,11 +109,6 @@ func debugEnv(which string) (isAvail bool, value bool) {
 	return true, true
 }
 
-// Printf is an externally-callable version of same, for server use so it doesn't get held up writing to console
-func Printf(format string, args ...interface{}) {
-	debugf(format, args...)
-}
-
 // Output with printf-style args
 func debugf(format string, args ...interface{}) {
 	debug(fmt.Sprintf(format, args...))

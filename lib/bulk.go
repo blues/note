@@ -28,9 +28,19 @@ import (
 
 // Debugging
 const debugJSONBin = false
+const debugBin = false
 
-// BulkNoteFormatV1 is the first and only version
-const BulkNoteFormatV1 = 0x00000001
+// Bulk note formats
+const bulkNoteFormatOriginal = 1 // Original format
+const bulkNoteFormatFlex = 2     // Different 'where', 'string', and 'payload' handling
+
+// Bulk header byte flags
+const bulkflagPayloadL = 0x01 // HL == 00:0byte, 01:1byte, 10:2bytes, 11:4bytes
+const bulkflagPayloadH = 0x02
+const bulkflagFlagsL = 0x04 // HL == 00:0byte, 01:1byte, 10:2bytes, 11:8bytes
+const bulkflagFlagsH = 0x08
+const bulkflagOLCL = 0x10 // HL == 00:0byte, 01:1byte, 10:2bytes, 11:4bytes
+const bulkflagOLCH = 0x20
 
 // BulkBody is the bulk data note body
 type BulkBody struct {
@@ -45,13 +55,17 @@ type BulkBody struct {
 
 // BulkTemplateContext is the context for the bulk template
 type BulkTemplateContext struct {
-	Template              string
-	TemplatePayloadLen    int
-	TemplatePayloadOffset int
-	TemplateFlagsOffset   int
-	Payload               []byte
-	PayloadEntries        int
-	PayloadEntryLength    int
+	NoteFormat uint32
+	Template   string
+	Bin        []byte
+	BinLen     int
+	// Used while parsing a record
+	BinOffset   int
+	BinUnderrun bool
+	// Fields only valid for bulkNoteFormatOriginal
+	ORIGTemplatePayloadLen    int
+	ORIGTemplatePayloadOffset int
+	ORIGTemplateFlagsOffset   int
 }
 
 // The flags length is sizeof(int64)
@@ -63,66 +77,146 @@ func isPointOne(test float64, base float64) bool {
 }
 
 // BulkDecodeTemplate decodes the template
-func BulkDecodeTemplate(templateBodyJSON []byte, compressedPayload []byte) (context BulkTemplateContext, entries int, err error) {
+func BulkDecodeTemplate(templateBodyJSON []byte, compressedPayload []byte) (context BulkTemplateContext, err error) {
 
 	body := BulkBody{}
 	note.JSONUnmarshal(templateBodyJSON, &body)
-	if body.NoteFormat != BulkNoteFormatV1 {
+	if body.NoteFormat != bulkNoteFormatOriginal && body.NoteFormat != bulkNoteFormatFlex {
 		err = fmt.Errorf("bulk template: unrecognized format: %d", body.NoteFormat)
 		return
 	}
 
-	// Parse the template
+	// Set up the context
+	context.NoteFormat = body.NoteFormat
 	context.Template = body.NoteTemplate
-	context.TemplatePayloadLen = body.NoteTemplatePayloadLen
-	err = parseTemplate(&context)
-	if err != nil {
-		return
+	context.ORIGTemplatePayloadLen = body.NoteTemplatePayloadLen
+
+	// Parse the template if this is the original format, because in that format entries were not self-describing
+	if body.NoteFormat == bulkNoteFormatOriginal {
+		err = parseORIGTemplate(&context)
+		if err != nil {
+			return
+		}
 	}
 
 	// Decompress the payload
-	context.Payload, err = snappy.Decode(nil, compressedPayload)
+	context.Bin, err = snappy.Decode(nil, compressedPayload)
+	context.BinLen = len(context.Bin)
 	if err != nil {
 		return
 	}
-	context.PayloadEntries = len(context.Payload) / context.PayloadEntryLength
-	entries = context.PayloadEntries
 
 	// Done
-	debugf("\n$$$ BULK DATA $$$: decompressed payload from %d to %d (%d entries at %d/entry)\n",
-		len(compressedPayload), len(context.Payload), len(context.Payload)/context.PayloadEntryLength, context.PayloadEntryLength)
+	//debugf("\n$$$ BULK DATA $$$: decompressed payload from %d to %d\n", len(compressedPayload), len(context.Bin))
 
 	return
 }
 
 // Data extraction routines
-func binExtractInt8(bin []byte) int8 {
+func (context *BulkTemplateContext) binExtract(n int) (value []byte, success bool) {
+	// Catch bogus values of n
+	if n < 0 || (context.BinOffset+n) < 0 {
+		if debugBin {
+			debugf("bulk underrun: invalid value of n %d at offset %d \n", n, context.BinOffset)
+		}
+		context.BinUnderrun = true
+	}
+
+	if (context.BinOffset + n) > context.BinLen {
+		if debugBin {
+			debugf("bulk underrun: want %d at offset %d but record len is only %d\n", n, context.BinOffset, context.BinLen)
+		}
+		context.BinUnderrun = true
+	}
+	if context.BinUnderrun {
+		return
+	}
+	value = context.Bin[context.BinOffset : context.BinOffset+n]
+	context.BinOffset += n
+	success = true
+	return
+}
+func (context *BulkTemplateContext) binExtractInt8() (value int8) {
+	bin, success := context.binExtract(1)
+	if !success {
+		return
+	}
 	return int8(bin[0])
 }
-func binExtractInt16(bin []byte) int16 {
-	var value int16
+func (context *BulkTemplateContext) binExtractUint8() (value uint8) {
+	bin, success := context.binExtract(1)
+	if !success {
+		return
+	}
+	return uint8(bin[0])
+}
+func (context *BulkTemplateContext) binExtractInt16() (value int16) {
+	bin, success := context.binExtract(2)
+	if !success {
+		return
+	}
 	value = int16(bin[0])
 	value = value | (int16(bin[1]) << 8)
 	return value
 }
-func binExtractInt24(bin []byte) int32 {
-	value := int32(bin[0])
+func (context *BulkTemplateContext) binExtractUint16() (value uint16) {
+	bin, success := context.binExtract(2)
+	if !success {
+		return
+	}
+	value = uint16(bin[0])
+	value = value | (uint16(bin[1]) << 8)
+	return value
+}
+func (context *BulkTemplateContext) binExtractInt24() (value int32) {
+	bin, success := context.binExtract(3)
+	if !success {
+		return
+	}
+	value = int32(bin[0])
 	value = value | (int32(bin[1]) << 8)
 	msb := int8(bin[2])
 	msbSignExtended := int32(msb)
 	value = value | (msbSignExtended << 16)
 	return value
 }
-func binExtractInt32(bin []byte) int32 {
-	var value int32
+func (context *BulkTemplateContext) binExtractUint24() (value uint32) {
+	bin, success := context.binExtract(3)
+	if !success {
+		return
+	}
+	value = uint32(bin[0])
+	value = value | (uint32(bin[1]) << 8)
+	value = value | (uint32(bin[2]) << 16)
+	return value
+}
+func (context *BulkTemplateContext) binExtractInt32() (value int32) {
+	bin, success := context.binExtract(4)
+	if !success {
+		return
+	}
 	value = int32(bin[0])
 	value = value | (int32(bin[1]) << 8)
 	value = value | (int32(bin[2]) << 16)
 	value = value | (int32(bin[3]) << 24)
 	return value
 }
-func binExtractInt64(bin []byte) int64 {
-	var value int64
+func (context *BulkTemplateContext) binExtractUint32() (value uint32) {
+	bin, success := context.binExtract(4)
+	if !success {
+		return
+	}
+	value = uint32(bin[0])
+	value = value | (uint32(bin[1]) << 8)
+	value = value | (uint32(bin[2]) << 16)
+	value = value | (uint32(bin[3]) << 24)
+	return value
+}
+func (context *BulkTemplateContext) binExtractInt64() (value int64) {
+	bin, success := context.binExtract(8)
+	if !success {
+		return
+	}
 	value = int64(bin[0])
 	value = value | (int64(bin[1]) << 8)
 	value = value | (int64(bin[2]) << 16)
@@ -133,57 +227,170 @@ func binExtractInt64(bin []byte) int64 {
 	value = value | (int64(bin[7]) << 56)
 	return value
 }
-func binExtractString(bin []byte) string {
-	s := ""
-	for i := 0; i < len(bin); i++ {
-		if bin[i] != 0 {
-			s += string(bin[i])
-		}
+func (context *BulkTemplateContext) binExtractUint64() (value uint64) {
+	bin, success := context.binExtract(8)
+	if !success {
+		return
 	}
-	return s
+	value = uint64(bin[0])
+	value = value | (uint64(bin[1]) << 8)
+	value = value | (uint64(bin[2]) << 16)
+	value = value | (uint64(bin[3]) << 24)
+	value = value | (uint64(bin[4]) << 32)
+	value = value | (uint64(bin[5]) << 40)
+	value = value | (uint64(bin[6]) << 48)
+	value = value | (uint64(bin[7]) << 56)
+	return value
 }
-func binExtractFloat16(bin []byte) float32 {
-	value := uint16(bin[0])
-	value = value | (uint16(bin[1]) << 8)
-	f16 := Float16(value)
+func (context *BulkTemplateContext) binExtractFloat16() (value float32) {
+	bin, success := context.binExtract(2)
+	if !success {
+		return
+	}
+	uvalue := uint16(bin[0])
+	uvalue = uvalue | (uint16(bin[1]) << 8)
+	f16 := Float16(uvalue)
 	return f16.Float32()
 }
-func binExtractFloat32(bin []byte) float32 {
+func (context *BulkTemplateContext) binExtractFloat32() (value float32) {
+	bin, success := context.binExtract(4)
+	if !success {
+		return
+	}
 	bits := binary.LittleEndian.Uint32(bin)
 	return math.Float32frombits(bits)
 }
-func binExtractFloat64(bin []byte) float64 {
+func (context *BulkTemplateContext) binExtractFloat64() (value float64) {
+	bin, success := context.binExtract(8)
+	if !success {
+		return
+	}
 	bits := binary.LittleEndian.Uint64(bin)
 	return math.Float64frombits(bits)
 }
-func binExtractBytes(bin []byte) []byte {
+func (context *BulkTemplateContext) binExtractBytes(n int) (value []byte) {
+	bin, success := context.binExtract(n)
+	if !success {
+		return
+	}
 	return bin
 }
+func (context *BulkTemplateContext) binExtractString(maxlen int) (value string) {
+	var strbytes []byte
+	if context.NoteFormat == bulkNoteFormatOriginal {
+		for i := 0; i < maxlen; i++ {
+			b := byte(context.binExtractUint8())
+			if b != 0 {
+				strbytes = append(strbytes, b)
+			}
+		}
 
-// BulkDecodeEntry extract a JSON object from the binary
-func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]interface{}, payload []byte, when int64, where int64) {
+	} else {
+		stringLen := context.binExtractUint16()
+		strbytes = context.binExtractBytes(int(stringLen))
+	}
+	value = string(strbytes)
+	return
+}
 
-	// Get the binary to be decoded
-	off := i * context.PayloadEntryLength
-	bin := context.Payload[off : off+context.PayloadEntryLength]
+// BulkDecodeNextEntry extract a JSON object from the binary.  Note that both 'when' and 'wherewhen'
+// returned in standard unix epoch seconds (not in nanoseconds)
+func (context *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]interface{}, payload []byte, when int64, where int64, wherewhen int64, olc string, success bool) {
 
-	// If there were flags, extract them
-	flags := int64(0)
-	if context.TemplateFlagsOffset != 0 {
-		flags = binExtractInt64(bin[context.TemplateFlagsOffset : context.TemplateFlagsOffset+flagsLength])
+	// Exit if nothing left
+	if context.BinLen == 0 {
+		return
 	}
 
-	// If there was a payload, extract it
-	if context.TemplatePayloadLen != 0 {
-		payload = binExtractBytes(bin[context.TemplatePayloadOffset : context.TemplatePayloadOffset+context.TemplatePayloadLen])
+	// Trace
+	if debugBin {
+		debugf("%x\n", context.Bin)
+	}
+
+	// Extract the bin header, and process the variable-length area
+	var flags uint64
+	if context.NoteFormat == bulkNoteFormatOriginal {
+
+		// If there was a payload, extract it
+		if context.ORIGTemplatePayloadLen != 0 {
+			context.BinOffset = context.ORIGTemplatePayloadOffset
+			payload = context.binExtractBytes(context.ORIGTemplatePayloadLen)
+		}
+
+		// If there were flags, extract them
+		if context.ORIGTemplateFlagsOffset != 0 {
+			context.BinOffset = context.ORIGTemplateFlagsOffset
+			flags = context.binExtractUint64()
+		}
+
+	} else {
+
+		// Extract the header and variable-length area position
+		context.BinOffset = 0
+		binHeader := context.binExtractUint8()
+		context.BinOffset = int(context.binExtractUint16())
+
+		// Extract payload length, and skip by the payload
+		payloadLen := 0
+		switch binHeader & (bulkflagPayloadL | bulkflagPayloadH) {
+		case bulkflagPayloadL:
+			payloadLen = int(context.binExtractUint8())
+		case bulkflagPayloadH:
+			payloadLen = int(context.binExtractUint16())
+		case bulkflagPayloadH | bulkflagPayloadL:
+			payloadLen = int(context.binExtractUint32())
+		}
+		payload = context.binExtractBytes(payloadLen)
+
+		// Extract flags length, and skip by the flags
+		switch binHeader & (bulkflagFlagsL | bulkflagFlagsH) {
+		case bulkflagFlagsL:
+			flags = uint64(context.binExtractUint8())
+		case bulkflagFlagsH:
+			flags = uint64(context.binExtractUint16())
+		case bulkflagFlagsH | bulkflagFlagsL:
+			flags = context.binExtractUint64()
+		}
+
+		// Extract OLC, and skip by it
+		olcLen := 0
+		switch binHeader & (bulkflagOLCL | bulkflagOLCH) {
+		case bulkflagOLCL:
+			olcLen = int(context.binExtractUint8())
+		case bulkflagOLCH:
+			olcLen = int(context.binExtractUint16())
+		case bulkflagOLCH | bulkflagOLCL:
+			olcLen = int(context.binExtractUint32())
+		}
+		olc = string(context.binExtractBytes(olcLen))
+
+	}
+
+	// The position right now is the length of the record
+	binRecLen := context.BinOffset
+
+	// Reset to the beginning of the record
+	context.BinOffset = 0
+	if context.NoteFormat != bulkNoteFormatOriginal {
+		context.BinOffset++    // BULKFLAGS header byte
+		context.BinOffset += 2 // Offset to variable length portion
 	}
 
 	// All entries begin with these
-	binOffset := 0
-	when = binExtractInt64(bin[binOffset : binOffset+8])
-	binOffset += 8
-	where = binExtractInt64(bin[binOffset : binOffset+8])
-	binOffset += 8
+	combinedWhen := context.binExtractInt64()
+	where = context.binExtractInt64()
+
+	// Prior to 2021-08-26, When was stored in nanoseconds, with the low order 1000000000 ALWAYS being 0
+	// because the notecard only measures time on 1-second granularity.  Thus, these bits were squandered.
+	// Starting on the ddate above, we changed the semantics to mean that when the low order 1000000000 is
+	// exactly 0, it means that wherewhen is not supplied.  Otherwise, it is the number of seconds prior
+	// to "when" that represents the time when the location was measured, offset by 1.  Please refer to
+	// the notecard repo src/app/json.c to see the code that encodes this field.
+	when = int64((uint64(combinedWhen) / 1000000000))
+	relativeWhereWhenOffsetSecs := int64(uint64(combinedWhen) % 1000000000)
+	if when > 0 && relativeWhereWhenOffsetSecs > 0 {
+		wherewhen = when - (relativeWhereWhenOffsetSecs - 1)
+	}
 
 	// Generate an output body JSON string from the input, without even paying any attention at all
 	// to the JSON hierarchy, arrays, or whatnot.
@@ -194,7 +401,7 @@ func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]inter
 	dec.UseNumber()
 	for {
 		if debugJSONBin {
-			debugf("%d/%d:\n  %s\n", binOffset, context.PayloadEntryLength, bodyJSON)
+			debugf("%d:\n  %s\n", context.BinOffset, bodyJSON)
 		}
 		t, err := dec.Token()
 		if err == io.EOF {
@@ -204,7 +411,7 @@ func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]inter
 		if err != nil {
 			break
 		}
-		switch t.(type) {
+		switch tt := t.(type) {
 		case jsonxt.Delim:
 			bodyJSON += fmt.Sprintf("%v", t)
 		case string:
@@ -217,49 +424,50 @@ func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]inter
 				if err2 == nil && i > 0 {
 					strLen = i
 				}
-				bodyJSON += "\"" + binExtractString(bin[binOffset:binOffset+strLen]) + "\""
-				binOffset += strLen
+				bodyJSON += "\"" + context.binExtractString(strLen) + "\""
 			}
 		case jsonxt.Number:
-			numberType, errInt := t.(jsonxt.Number).Int64()
+			numberType, errInt := tt.Int64()
 			if errInt == nil {
 				// Integer
 				switch numberType {
 				case 11:
-					bodyJSON += fmt.Sprintf("%d", binExtractInt8(bin[binOffset:binOffset+1]))
-					binOffset++
+					bodyJSON += fmt.Sprintf("%d", context.binExtractInt8())
 				case 12:
-					bodyJSON += fmt.Sprintf("%d", binExtractInt16(bin[binOffset:binOffset+2]))
-					binOffset += 2
+					bodyJSON += fmt.Sprintf("%d", context.binExtractInt16())
 				case 13:
-					bodyJSON += fmt.Sprintf("%d", binExtractInt24(bin[binOffset:binOffset+3]))
-					binOffset += 3
+					bodyJSON += fmt.Sprintf("%d", context.binExtractInt24())
+				case 21:
+					bodyJSON += fmt.Sprintf("%d", context.binExtractUint8())
+				case 22:
+					bodyJSON += fmt.Sprintf("%d", context.binExtractUint16())
+				case 23:
+					bodyJSON += fmt.Sprintf("%d", context.binExtractUint24())
 				case 1:
 					fallthrough
 				case 14:
-					bodyJSON += fmt.Sprintf("%d", binExtractInt32(bin[binOffset:binOffset+4]))
-					binOffset += 4
+					bodyJSON += fmt.Sprintf("%d", context.binExtractInt32())
 				case 18:
-					bodyJSON += fmt.Sprintf("%d", binExtractInt64(bin[binOffset:binOffset+8]))
-					binOffset += 8
+					bodyJSON += fmt.Sprintf("%d", context.binExtractInt64())
+				case 24:
+					bodyJSON += fmt.Sprintf("%d", context.binExtractUint32())
+				case 28:
+					bodyJSON += fmt.Sprintf("%d", context.binExtractUint64())
 				default:
 					bodyJSON += "0"
 				}
 			} else {
-				numberType, errFloat := t.(jsonxt.Number).Float64()
+				numberType, errFloat := tt.Float64()
 				if errFloat != nil {
 					bodyJSON += "0"
 				} else {
 					// Real
 					if isPointOne(numberType, 12) {
-						bodyJSON += fmt.Sprintf("%g", binExtractFloat16(bin[binOffset:binOffset+2]))
-						binOffset += 2
+						bodyJSON += fmt.Sprintf("%g", context.binExtractFloat16())
 					} else if isPointOne(numberType, 14) {
-						bodyJSON += fmt.Sprintf("%g", binExtractFloat32(bin[binOffset:binOffset+4]))
-						binOffset += 4
+						bodyJSON += fmt.Sprintf("%g", context.binExtractFloat32())
 					} else if isPointOne(numberType, 18) || isPointOne(numberType, 1) {
-						bodyJSON += fmt.Sprintf("%g", binExtractFloat64(bin[binOffset:binOffset+8]))
-						binOffset += 8
+						bodyJSON += fmt.Sprintf("%g", context.binExtractFloat64())
 					} else {
 						bodyJSON += "0"
 					}
@@ -284,6 +492,28 @@ func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]inter
 	// Return the json object as the body
 	body = jsonObj
 
+	// Exit if we'd encountered underrun
+	if context.BinUnderrun {
+		return
+	}
+
+	// If the record length is 0 at this point, it's because there was no payload, no flags, and
+	// no variable OLC buffer area following the binary record.  In this case, the actual
+	// record length is the current position after parsing the data.
+	if binRecLen == 0 {
+		binRecLen = context.BinOffset
+	}
+
+	// Advance the context to the next entry
+	success = true
+	context.Bin = context.Bin[binRecLen:]
+	context.BinLen = len(context.Bin)
+
+	// Trace
+	if debugBin {
+		debugf("bin: done with %d-byte record (%d bytes remaining)\n", binRecLen, context.BinLen)
+	}
+
 	// Done
 	return
 
@@ -293,11 +523,11 @@ func BulkDecodeEntry(context *BulkTemplateContext, i int) (body map[string]inter
 func omitempty(in map[string]interface{}) (out map[string]interface{}) {
 	out = in
 	for key, value := range in {
-		switch value.(type) {
+		switch tv := value.(type) {
 		case json.Number:
-			valueAsInt64, err := value.(json.Number).Int64()
+			valueAsInt64, err := tv.Int64()
 			if err == nil && valueAsInt64 == 0 {
-				valueAsFloat64, err := value.(json.Number).Float64()
+				valueAsFloat64, err := tv.Float64()
 				if err == nil && valueAsFloat64 == 0 {
 					delete(out, key)
 				}
@@ -325,8 +555,9 @@ func omitempty(in map[string]interface{}) (out map[string]interface{}) {
 	return
 }
 
-// Get the entry len by doing a pass over the template
-func parseTemplate(context *BulkTemplateContext) (err error) {
+// In the case of the ORIG format, get parameters about bin records from the template
+// because in that format the bin records were not yet self-describing.
+func parseORIGTemplate(context *BulkTemplateContext) (err error) {
 
 	// All templates begin with time and location
 	binLength := 0
@@ -348,7 +579,7 @@ func parseTemplate(context *BulkTemplateContext) (err error) {
 			err = err2
 			break
 		}
-		switch t.(type) {
+		switch tt := t.(type) {
 		case jsonxt.Delim:
 			if debugJSONBin {
 				debugf("TEMPLATE DELIM %s\n", fmt.Sprintf("%v", t))
@@ -370,7 +601,7 @@ func parseTemplate(context *BulkTemplateContext) (err error) {
 			if debugJSONBin {
 				debugf("TEMPLATE number\n")
 			}
-			numberType, errInt := t.(jsonxt.Number).Int64()
+			numberType, errInt := tt.Int64()
 			if errInt == nil {
 				// Integer
 				switch numberType {
@@ -390,7 +621,7 @@ func parseTemplate(context *BulkTemplateContext) (err error) {
 					err = fmt.Errorf("unrecognized JSON integer type")
 				}
 			} else {
-				numberType, errFloat := t.(jsonxt.Number).Float64()
+				numberType, errFloat := tt.Float64()
 				if errFloat != nil {
 					err = fmt.Errorf("unrecognized JSON number")
 				} else {
@@ -419,16 +650,14 @@ func parseTemplate(context *BulkTemplateContext) (err error) {
 	}
 
 	// Payload
-	context.TemplatePayloadOffset = binLength
-	binLength += context.TemplatePayloadLen
+	context.ORIGTemplatePayloadOffset = binLength
+	binLength += context.ORIGTemplatePayloadLen
 
 	// Flags
 	if boolPresent {
-		context.TemplateFlagsOffset = binLength
+		context.ORIGTemplateFlagsOffset = binLength
 		binLength += flagsLength
 	}
 
-	// Done
-	context.PayloadEntryLength = binLength
 	return
 }

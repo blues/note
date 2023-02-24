@@ -10,6 +10,7 @@
 package notelib
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -23,6 +24,7 @@ import (
 
 // Debug
 var debugGetChanges = false
+var debugModified = false
 
 // Notefile is The outermost data structure of a Notefile JSON
 // object, containing a set of notes that may be synchronized.
@@ -233,58 +235,6 @@ func (nf *Notefile) GetNote(noteID string) (xnote note.Note, err error) {
 
 }
 
-// processEvent handles a notification command
-// NOTE that for Update/Add/Delete, it is up to the caller to replace
-// event.EndpointID as appropriate as the source for the operation!
-func (nf *Notefile) processEvent(event note.Event) (err error) {
-
-	// Perform the desired action
-	switch event.Req {
-
-	case note.EventNoAction:
-		// Do nothing
-
-	case note.EventAdd:
-		xnote := note.Note{}
-		xnote.Body = *event.Body
-		xnote.Payload = event.Payload
-		err = nf.AddNote(event.EndpointID, event.NoteID, xnote)
-		if err != nil {
-			return fmt.Errorf("cannot add note %s to %s: %s", event.NoteID, nf.notefileID, err)
-		}
-
-	case note.EventUpdate:
-		var xnote note.Note
-		xnote, err = nf.GetNote(event.NoteID)
-		if err != nil {
-			return err
-		}
-		xnote.Body = *event.Body
-		xnote.Payload = event.Payload
-		err = nf.UpdateNote(event.EndpointID, event.NoteID, xnote)
-		if err != nil {
-			return fmt.Errorf("cannot update note %s in %s: %s", event.NoteID, nf.notefileID, err)
-		}
-
-	case note.EventDelete:
-		err = nf.DeleteNote(event.EndpointID, event.NoteID)
-		if err != nil {
-			return fmt.Errorf("error deleting note %s in %s: %s", event.NoteID, nf.notefileID, err)
-		}
-
-		// Purge tombstones, because unlike Merge there is no client-initiated call that is going to
-		// eventually get rid of all the dead wood within the file.
-		nf.PurgeTombstones(note.DefaultHubEndpointID)
-
-	default:
-		return fmt.Errorf("unrecognized request: %s", event.Req)
-
-	}
-
-	return err
-
-}
-
 // event dispatches to the event proc based on the last change made to NoteID
 func (nf *Notefile) event(local bool, NoteID string) {
 
@@ -324,9 +274,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 	event.DeviceSN = nf.eventDeviceSN
 	event.ProductUID = nf.eventProductUID
 	if nf.eventAppUID != "" {
-		app := note.EventApp{}
-		event.App = &app
-		event.App.AppUID = nf.eventAppUID
+		event.AppUID = nf.eventAppUID
 	}
 	event.Payload = xnote.Payload
 	if xnote.Body != nil {
@@ -336,16 +284,12 @@ func (nf *Notefile) event(local bool, NoteID string) {
 		histories := *xnote.Histories
 		event.When = histories[0].When
 		event.Where = histories[0].Where
+		event.WhereWhen = histories[0].WhereWhen
 		if event.Where != "" {
-			// Don't set WhereWhen because we don't actually know
-			// when the GPS was updated because we don't pass it in.
 			area, err := olc.Decode(event.Where)
 			if err == nil {
 				event.WhereLat, event.WhereLon = area.Center()
 			}
-			// If Where really is specified, then the When of the Where is the closest date that we have
-			// which is the captured date of the note.
-			event.WhereWhen = event.When
 		}
 	}
 
@@ -366,14 +310,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 				debugf(" (%d-byte payload)", len(event.Payload))
 			}
 		}
-		if event.Body != nil {
-			bodyJSON, err := note.JSONMarshal(event.Body)
-			if err != nil {
-				debugf(" (CANNOT MARSHAL TEMPLATE - BULK DATA DISCARDED)\n%v\n", event.Body)
-				return
-			}
-			debugf(" %s", string(bodyJSON))
-		}
+		// No need to log customer data body
 		debugf("\n")
 	}
 
@@ -383,15 +320,9 @@ func (nf *Notefile) event(local bool, NoteID string) {
 
 	// Perform the notification (checking savedFn in case of race condition, because everything is unlocked
 	if savedFn != nil {
-		err = savedFn(nf.eventCtx, local, nf, &event)
+		err = savedFn(context.Background(), nf.eventCtx, local, nf, &event)
 		if err != nil {
 			debugf("event error: %s\n", err)
-		} else {
-			event.Req = event.Rsp
-			err = nf.processEvent(event)
-			if err != nil {
-				debugf("error processing event response: %s\n", err)
-			}
 		}
 	}
 
@@ -426,21 +357,34 @@ func (nf *Notefile) uAddNote(endpointID string, noteID string, xnote *note.Note,
 	// Set the required fields
 	xnote.Updates = 0
 	xnote.Deleted = deleted
-	xnote.Histories = nil
 	xnote.Conflicts = nil
 
 	// Append the first history
-	noteHistories := []note.History{}
-	noteHistories = append(noteHistories, newHistory(endpointID, 0, "", 0))
-	xnote.Histories = &noteHistories
+	if xnote.Histories == nil {
+		noteHistories := []note.History{}
+		noteHistories = append(noteHistories, newHistory(endpointID, 0, "", 0, 0))
+		xnote.Histories = &noteHistories
+	}
 
 	// Do it
 	err := nf.uAddNoteEx(noteID, xnote)
 
 	// Mark modified and exit
-	nf.modCount++
+	nf.MarkAsModified("uAddNote")
 	return err
 
+}
+
+// Mark the notefile as modified
+func (nf *Notefile) MarkAsModified(reason string) {
+	if debugModified {
+		notefileID := nf.notefileID
+		if notefileID == "" {
+			notefileID = "notefile"
+		}
+		debugf("%s modified: %s\n", notefileID, reason)
+	}
+	nf.modCount++
 }
 
 // AddNote adds a newly-created Note to a Notefile.  After the note is added to the Notefile,
@@ -452,6 +396,12 @@ func (nf *Notefile) uAddNote(endpointID string, noteID string, xnote *note.Note,
 // asymmetry in synchronization that is primarily useful when sending "to hub" or "from hub".
 // By convention, sent notes should be deleted after they have been processed by the recipient(s).
 func (nf *Notefile) AddNote(endpointID string, noteID string, xnote note.Note) (err error) {
+	xnote.Histories = nil
+	return nf.AddNoteWithHistory(endpointID, noteID, xnote)
+}
+
+// AddNoteWithHistory is same as AddNote, but it retains history
+func (nf *Notefile) AddNoteWithHistory(endpointID string, noteID string, xnote note.Note) (err error) {
 
 	// Create a note ID if not specified
 	if nf.Queue || noteID == "" {
@@ -505,7 +455,7 @@ func (nf *Notefile) uReplaceNote(noteID string, xnote *note.Note) error {
 		nf.Notes[noteID] = *xnote
 	}
 
-	nf.modCount++
+	nf.MarkAsModified("uReplaceNote")
 	return nil
 
 }
@@ -560,7 +510,7 @@ func (nf *Notefile) uDeleteNote(endpointID string, noteID string, xnote *note.No
 	// If this is a queue, do an automatic purge
 	if nf.Queue {
 		delete(nf.Notes, noteID)
-		nf.modCount++
+		nf.MarkAsModified("uDeleteNote")
 		return
 	}
 
@@ -603,8 +553,8 @@ func (nf *Notefile) DeleteNote(endpointID string, noteID string) error {
 
 }
 
-// resolveNoteConflicts resolves all conflicts that are pending for a Note in a Notefile
-func (nf *Notefile) resolveNoteConflicts(endpointID string, noteID string, xnote note.Note) error {
+// ResolveNoteConflicts resolves all conflicts that are pending for a Note in a Notefile
+func (nf *Notefile) ResolveNoteConflicts(endpointID string, noteID string, xnote note.Note) error {
 
 	// Lock for writing
 	nfLock.Lock()
@@ -621,7 +571,7 @@ func (nf *Notefile) resolveNoteConflicts(endpointID string, noteID string, xnote
 	nf.Notes[noteID] = xnote
 
 	// Done
-	nf.modCount++
+	nf.MarkAsModified("ResolveNoteConflicts")
 	nfLock.Unlock()
 	return nil
 
@@ -698,10 +648,10 @@ func (nf *Notefile) MergeNotefile(fromNotefile Notefile) error {
 		if !present {
 			// Add the note
 			thisError = nf.uAddNoteEx(idMergeNote, &mergeNote)
-			nf.modCount++
+			nf.MarkAsModified("MergeNotefile:uAddNoteEx")
 		} else {
 			thisError = nf.uReplaceNote(idMergeNote, &mergeNote)
-			nf.modCount++
+			nf.MarkAsModified("MergeNotefile:uReplaceNote")
 		}
 
 		// If no error, add this to the list of notes to later trigger the notifier
@@ -763,7 +713,7 @@ func (nf *Notefile) AddTracker(trackerID string) error {
 	nf.Trackers[trackerID] = tracker
 
 	// Done
-	nf.modCount++
+	nf.MarkAsModified("AddTracker")
 	nfLock.Unlock()
 	return nil
 
@@ -802,7 +752,7 @@ func (nf *Notefile) DeleteTracker(trackerID string) error {
 	delete(nf.Trackers, trackerID)
 
 	// Done
-	nf.modCount++
+	nf.MarkAsModified("DeleteTracker")
 	nfLock.Unlock()
 	return nil
 
@@ -823,7 +773,7 @@ func (nf *Notefile) ClearTracker(trackerID string) error {
 	nf.Trackers[trackerID] = tracker
 
 	// Done
-	nf.modCount++
+	nf.MarkAsModified("ClearTracker")
 	nfLock.Unlock()
 	return nil
 
@@ -860,7 +810,7 @@ func (nf *Notefile) swapTrackerSessionID(trackerID string, newSessionID int64) (
 		tracker.SessionID = newSessionID
 		nf.Trackers[trackerID] = tracker
 	}
-	nf.modCount++
+	nf.MarkAsModified("swapTrackerSessionID")
 
 	// Unlock
 	nfLock.Unlock()
@@ -977,7 +927,6 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 
 	// Init return values to include the entire range of notes in the notefile
 	since = 1
-	until = nf.Change
 
 	// The "optimize" flag indicates whether we have gone through at least one full pass of returning
 	// changes to a caller.  Until doing one full pass, we cannot be optimal.
@@ -994,7 +943,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 			if tracker.Change <= 1 && tracker.Optimize {
 				tracker.Optimize = false
 				nf.Trackers[endpointID] = tracker
-				nf.modCount++
+				nf.MarkAsModified("GetChanges:ALL-TRACKER")
 			}
 
 			// Remember whether or not we are optimizing
@@ -1007,7 +956,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 			tracker.Change = 1
 			tracker.Optimize = false
 			nf.Trackers[endpointID] = tracker
-			nf.modCount++
+			nf.MarkAsModified("GetChanges:ALL")
 
 		}
 
@@ -1123,7 +1072,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 		if present && !tracker.Optimize {
 			tracker.Optimize = true
 			nf.Trackers[endpointID] = tracker
-			nf.modCount++
+			nf.MarkAsModified("GetChanges:None")
 			if debugGetChanges {
 				debugf("GetChanges optimization enabled for future calls\n")
 			}
@@ -1170,7 +1119,7 @@ func (nf *Notefile) PurgeTombstones(ignoreEndpointID string) (err error) {
 	for trackerID, tracker := range nf.Trackers {
 		// Don't hold tombstones for the specified (local) endpoint; we're only interested in
 		// keeping tombstones around for remote endpoints that are tracking local changes
-		if trackerID == ignoreEndpointID {
+		if trackerID == ignoreEndpointID || ignoreEndpointID == "*" {
 			continue
 		}
 		if tracker.Change != 0 && tracker.Change < minTracked {
@@ -1198,7 +1147,7 @@ func (nf *Notefile) PurgeTombstones(ignoreEndpointID string) (err error) {
 				debugf("purgeTombstones: deleting noteID:%s Sent:%t Deleted:%t Change:%d\n", noteID, note.Sent, note.Deleted, note.Change)
 			}
 			delete(nf.Notes, noteID)
-			nf.modCount++
+			nf.MarkAsModified("GetChanges:PurgeTombstones")
 		}
 	}
 
@@ -1247,7 +1196,7 @@ func (nf *Notefile) updateChangeTrackerEx(endpointID string, since int64, until 
 
 	// Write the tracker
 	nf.Trackers[endpointID] = tracker
-	nf.modCount++
+	nf.MarkAsModified("updateChangeTrackerEx")
 
 	// We're done updating the tracker
 	nfLock.Unlock()

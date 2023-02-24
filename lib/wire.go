@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/blues/note-go/note"
-	"github.com/golang/protobuf/proto"
+	"github.com/blues/note-go/notecard"
 	"github.com/golang/snappy"
+	"google.golang.org/protobuf/proto"
 )
 
 // Available JSON compression formats.
@@ -211,7 +213,6 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 
 // Decompress a byte array known to contain JSON.  Note that we support 08 as of 11/01/2020.
 func jsonDecompress(compressed []byte) (normal []byte, err error) {
-	normal = []byte{}
 
 	// Remove header byte
 	if len(compressed) == 0 {
@@ -560,11 +561,11 @@ func wireProcessVersionByte(version byte) (isValid bool, headerLength int) {
 // wireMake creates a header from the specified parameters
 func wireMake(protobuf *[]byte, binary *[]byte) (out []byte) {
 
-	header := []byte{}
 	protobufLength := len(*protobuf)
 	binaryLength := len(*binary)
 
 	// Make the header
+	var header []byte
 	if protobufLength == 0 && binaryLength == 0 {
 		header = make([]byte, 1)
 		header[0] = 0
@@ -639,6 +640,18 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.DeviceSN != "" {
 		pb.DeviceSN = &msg.DeviceSN
 	}
+	if msg.DeviceSKU != "" {
+		pb.DeviceSKU = &msg.DeviceSKU
+	}
+	if msg.DeviceOrderingCode != "" {
+		pb.DeviceOrderingCode = &msg.DeviceOrderingCode
+	}
+	if msg.DeviceFirmware != 0 {
+		pb.DeviceFirmware = &msg.DeviceFirmware
+	}
+	if msg.DevicePIN != "" {
+		pb.DevicePIN = &msg.DevicePIN
+	}
 	if msg.ProductUID != "" {
 		pb.ProductUID = &msg.ProductUID
 	}
@@ -688,13 +701,13 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.SessionIDNext != 0 {
 		pb.SessionIDNext = &msg.SessionIDNext
 	}
-	if msg.SessionIDMismatch != false {
+	if msg.SessionIDMismatch {
 		pb.SessionIDMismatch = &msg.SessionIDMismatch
 	}
-	if msg.NotificationSession != false {
+	if msg.NotificationSession {
 		pb.NotificationSession = &msg.NotificationSession
 	}
-	if msg.ContinuousSession != false {
+	if msg.ContinuousSession {
 		pb.ContinuousSession = &msg.ContinuousSession
 	}
 	if msg.Voltage100 != 0 {
@@ -720,6 +733,12 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	}
 	if msg.UsageSentBytes != 0 {
 		pb.UsageSentBytes = &msg.UsageSentBytes
+	}
+	if msg.UsageRcvdBytesSecondary != 0 {
+		pb.UsageRcvdBytesSecondary = &msg.UsageRcvdBytesSecondary
+	}
+	if msg.UsageSentBytesSecondary != 0 {
+		pb.UsageSentBytesSecondary = &msg.UsageSentBytesSecondary
 	}
 	if msg.UsageTCPSessions != 0 {
 		pb.UsageTCPSessions = &msg.UsageTCPSessions
@@ -824,7 +843,8 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 }
 
 // wireProcessHeader extracts protocol buffer and binary lengths from the header
-func wireReadHeader(version byte, header []byte) (isValid bool, protobufLength int64, binaryLength int64) {
+func wireReadHeader(version byte, header []byte) (protobufLength int64, binaryLength int64, err error) {
+	var isValidVersion bool
 
 	switch version {
 
@@ -836,8 +856,7 @@ func wireReadHeader(version byte, header []byte) (isValid bool, protobufLength i
 	case 0:
 		protobufLength = 0
 		binaryLength = 0
-		isValid = true
-		return
+		isValidVersion = true
 
 		// 1 byte version == 1
 		// 1 byte protobuf length
@@ -847,8 +866,7 @@ func wireReadHeader(version byte, header []byte) (isValid bool, protobufLength i
 	case 1:
 		protobufLength = int64(header[0])
 		binaryLength = int64(header[1])
-		isValid = true
-		return
+		isValidVersion = true
 
 		// 1 byte version == 2
 		// 1 byte protobuf length
@@ -858,8 +876,7 @@ func wireReadHeader(version byte, header []byte) (isValid bool, protobufLength i
 	case 2:
 		protobufLength = int64(header[0])
 		binaryLength = (int64(header[2]) << 8) | int64(header[1])
-		isValid = true
-		return
+		isValidVersion = true
 
 		// 1 byte version == 3
 		// 2 byte protobuf length
@@ -869,8 +886,7 @@ func wireReadHeader(version byte, header []byte) (isValid bool, protobufLength i
 	case 3:
 		protobufLength = (int64(header[1]) << 8) | int64(header[0])
 		binaryLength = (int64(header[3]) << 8) | int64(header[2])
-		isValid = true
-		return
+		isValidVersion = true
 
 		// 1 byte version == 4
 		// 4 byte protobuf length
@@ -880,8 +896,7 @@ func wireReadHeader(version byte, header []byte) (isValid bool, protobufLength i
 	case 4:
 		protobufLength = (int64(header[3]) << 24) | (int64(header[2]) << 16) | (int64(header[1]) << 8) | int64(header[0])
 		binaryLength = (int64(header[7]) << 24) | (int64(header[6]) << 16) | (int64(header[5]) << 8) | int64(header[4])
-		isValid = true
-		return
+		isValidVersion = true
 
 		// 1 byte version == 5
 		// 4 byte binary length
@@ -889,13 +904,36 @@ func wireReadHeader(version byte, header []byte) (isValid bool, protobufLength i
 	case 5:
 		protobufLength = 0
 		binaryLength = (int64(header[3]) << 24) | (int64(header[2]) << 16) | (int64(header[1]) << 8) | int64(header[0])
-		isValid = true
-		return
+		isValidVersion = true
+	}
 
+	if !isValidVersion {
+		err = fmt.Errorf("wire: Invalid header version %d", version)
+		return
+	}
+
+	// Validate the header length fields, knowing that this is an RPC coming from
+	// the memory of a microcontroller with far less than 1MB of SRAM.  Note that
+	// this doesn't guarantee that the header is valid, but it definitely will
+	// return false if it's obviously invalid.  A fuzzer will definitely still
+	// be able to send us garbage.
+
+	// Our protobufs are quite small and have no variable-length data
+	if protobufLength < 0 || protobufLength > 10000 {
+		err = fmt.Errorf("wire: protobufLength out of range %d", protobufLength)
+		return
+	}
+
+	// Our binary generally contains a Notefile structure, and can't
+	// possibly be larger than the memory of the microcontroller.  Since
+	// as of 2022 we currently restrict our firmware to use 512KB of SRAM,
+	// a 2MB check should be quite reasonable.
+	if binaryLength < 0 || binaryLength > 2*1024*1024 {
+		err = fmt.Errorf("wire: binaryLength out of range %d", protobufLength)
+		return
 	}
 
 	return
-
 }
 
 // u32min returns the smaller of x or y.
@@ -978,37 +1016,30 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	}
 	session.DeviceUID = req.DeviceUID
 	session.DeviceSN = req.DeviceSN
+	session.DeviceSKU = req.DeviceSKU
+	session.DeviceOrderingCode = req.DeviceOrderingCode
+	session.DeviceFirmware = req.DeviceFirmware
+	session.DevicePIN = req.DevicePIN
 	session.ProductUID = req.ProductUID
 	session.DeviceEndpointID = req.DeviceEndpointID
 	session.HubEndpointID = req.HubEndpointID
 	session.HubSessionTicket = req.HubSessionTicket
 	session.FactoryResetID = req.HubSessionFactoryResetID
-	session.Session.This.Since = req.UsageProvisioned
-	session.Session.This.RcvdBytes = req.UsageRcvdBytes
-	session.Session.This.SentBytes = req.UsageSentBytes
-	session.Session.This.TCPSessions = req.UsageTCPSessions
-	session.Session.This.TLSSessions = req.UsageTLSSessions
-	session.Session.This.RcvdNotes = req.UsageRcvdNotes
-	session.Session.This.SentNotes = req.UsageSentNotes
+	session.Session.This().Since = req.UsageProvisioned
+	session.Session.This().RcvdBytes = req.UsageRcvdBytes
+	session.Session.This().SentBytes = req.UsageSentBytes
+	session.Session.This().RcvdBytesSecondary = req.UsageRcvdBytesSecondary
+	session.Session.This().SentBytesSecondary = req.UsageSentBytesSecondary
+	session.Session.This().TCPSessions = req.UsageTCPSessions
+	session.Session.This().TLSSessions = req.UsageTLSSessions
+	session.Session.This().RcvdNotes = req.UsageRcvdNotes
+	session.Session.This().SentNotes = req.UsageSentNotes
 	session.Session.HighPowerSecsTotal = req.HighPowerSecsTotal
 	session.Session.HighPowerSecsData = req.HighPowerSecsData
 	session.Session.HighPowerSecsGPS = req.HighPowerSecsGPS
 	session.Session.HighPowerCyclesTotal = req.HighPowerCyclesTotal
 	session.Session.HighPowerCyclesData = req.HighPowerCyclesData
 	session.Session.HighPowerCyclesGPS = req.HighPowerCyclesGPS
-	var mcc, mnc, lac, cellid, rssi, sinr, rsrp, rsrq int
-	var rat string
-	fmt.Sscanf(req.CellID, "%d,%d,%d,%d,%d,%d,%d,%d,%s", &mcc, &mnc, &lac, &cellid, &rssi, &sinr, &rsrp, &rsrq, &rat)
-	if req.CellID == "" || mcc == 0 {
-		session.Session.CellID = ""
-	} else {
-		session.Session.CellID = fmt.Sprintf("%d,%d,%d,%d", mcc, mnc, lac, cellid)
-	}
-	session.Session.Rssi = rssi
-	session.Session.Sinr = sinr
-	session.Session.Rsrp = rsrp
-	session.Session.Rsrq = rsrq
-	session.Session.Rat = rat
 	session.Session.Voltage = float64(req.Voltage100) / 100
 	session.Session.Temp = float64(req.Temp100) / 100
 	if req.Voltage1000 != 0 {
@@ -1022,10 +1053,122 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.Session.Trigger = req.SessionTrigger
 	session.Notification = req.NotificationSession
 	session.Session.ContinuousSession = req.ContinuousSession
-	session.Session.ScanResults = req.nf.Payload
 	if req.MessageType == msgDiscover {
 		session.Discovery = true
 	}
+
+	// This complicated sequence is to perform this Sscanf, except that golang's Sscanf is so aggressive
+	// that the first %s eats the remainder of the string and does not pay attention to the "," after
+	// it inside the format string. Apparently, %s only works at the end of a format string.
+	// fmt.Sscanf(req.CellID, "%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%s,%s,%s",
+	//     &mcc, &mnc, &lac, &cellid, &rssi, &sinr, &rsrp, &rsrq, &rat, &bearer, &bars, &str1, &str2, &ip)
+	var mcc, mnc, lac, cellid, rssi, sinr, rsrp, rsrq, bearer, bars int
+	var rat, str1, str2, ip string
+	s := strings.Split(req.CellID, ",")
+	if len(s) > 0 {
+		mcc, _ = strconv.Atoi(s[0])
+	}
+	if len(s) > 1 {
+		mnc, _ = strconv.Atoi(s[1])
+	}
+	if len(s) > 2 {
+		lac, _ = strconv.Atoi(s[2])
+	}
+	if len(s) > 3 {
+		cellid, _ = strconv.Atoi(s[3])
+	}
+	if len(s) > 4 {
+		rssi, _ = strconv.Atoi(s[4])
+	}
+	if len(s) > 5 {
+		sinr, _ = strconv.Atoi(s[5])
+	}
+	if len(s) > 6 {
+		rsrp, _ = strconv.Atoi(s[6])
+	}
+	if len(s) > 7 {
+		rsrq, _ = strconv.Atoi(s[7])
+	}
+	if len(s) > 8 {
+		rat = s[8]
+	}
+	if len(s) > 9 {
+		bearer, _ = strconv.Atoi(s[9])
+	}
+	if len(s) > 10 {
+		bars, _ = strconv.Atoi(s[10])
+	}
+	if len(s) > 11 {
+		str1 = s[11]
+	}
+	if len(s) > 12 {
+		str2 = s[12]
+	}
+	if len(s) > 13 {
+		ip = s[13]
+	}
+
+	// Set the network information parsed by CellID
+	if req.CellID == "" || mcc == 0 {
+		session.Session.CellID = ""
+	} else {
+		session.Session.CellID = fmt.Sprintf("%d,%d,%d,%d", mcc, mnc, lac, cellid)
+	}
+	session.Session.Rssi = rssi
+	session.Session.Sinr = sinr
+	session.Session.Rsrp = rsrp
+	session.Session.Rsrq = rsrq
+	session.Session.Rat = rat
+	session.Session.Bars = bars
+	session.Session.Ip = ip
+	if bearer == notecard.NetworkBearerWLan {
+		session.Session.Bssid = str1
+		session.Session.Ssid = str2
+	} else {
+		session.Session.Iccid = str1
+		session.Session.Apn = str2
+	}
+	switch bearer {
+	case notecard.NetworkBearerGsm:
+		session.Session.Bearer = "GSM"
+	case notecard.NetworkBearerTdScdma:
+		session.Session.Bearer = "TD-SCDMA"
+	case notecard.NetworkBearerWcdma:
+		session.Session.Bearer = "WCDMA"
+	case notecard.NetworkBearerCdma2000:
+		session.Session.Bearer = "CDMA2000"
+	case notecard.NetworkBearerWiMax:
+		session.Session.Bearer = "WIMAX"
+	case notecard.NetworkBearerLteTdd:
+		session.Session.Bearer = "LTE TDD"
+	case notecard.NetworkBearerLteFdd:
+		session.Session.Bearer = "LTE FDD"
+	case notecard.NetworkBearerNBIot:
+		session.Session.Bearer = "NB-IoT"
+	case notecard.NetworkBearerWLan:
+		session.Session.Bearer = "WiFi"
+	case notecard.NetworkBearerBluetooth:
+		session.Session.Bearer = "Bluetooth"
+	case notecard.NetworkBearerIeee802p15p4:
+		session.Session.Bearer = "IEEE 802.15.4"
+	case notecard.NetworkBearerEthernet:
+		session.Session.Bearer = "Ethernet"
+	case notecard.NetworkBearerDsl:
+		session.Session.Bearer = "DSL"
+	case notecard.NetworkBearerPlc:
+		session.Session.Bearer = "PLC"
+	case notecard.NetworkBearerUnknown:
+		session.Session.Bearer = "unknown"
+	}
+
+	// Devices prior to 13701 did this on ALL transactions, but it really
+	// should *only* be performed on NoteboxSummary and Ping transactions
+	// so that we don't interpret arbitrary payloads (on restarted-sessions)
+	// as scan results.  Builds after 13701 only send this on pings.
+	if req.nf.Payload != nil && (req.MessageType == msgPing || req.MessageType == msgNoteboxSummary) {
+		session.Session.ScanResults = req.nf.Payload
+	}
+
 	return
 }
 
@@ -1049,9 +1192,8 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 		err = fmt.Errorf("wire: can't read header")
 		return
 	}
-	isValid, protobufLength, binaryLength := wireReadHeader(wirever, wire[1:(hdrlen+1)])
-	if !isValid {
-		err = fmt.Errorf("wire: invalid header")
+	protobufLength, binaryLength, err := wireReadHeader(wirever, wire[1:(hdrlen+1)])
+	if err != nil {
 		return
 	}
 
@@ -1077,6 +1219,10 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.Error = pb.GetError()
 	msg.DeviceUID = pb.GetDeviceUID()
 	msg.DeviceSN = pb.GetDeviceSN()
+	msg.DeviceSKU = pb.GetDeviceSKU()
+	msg.DeviceOrderingCode = pb.GetDeviceOrderingCode()
+	msg.DeviceFirmware = pb.GetDeviceFirmware()
+	msg.DevicePIN = pb.GetDevicePIN()
 	msg.ProductUID = pb.GetProductUID()
 	msg.DeviceEndpointID = pb.GetDeviceEndpointID()
 	msg.HubTimeNs = pb.GetHubTimeNs()
@@ -1103,6 +1249,8 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.UsageProvisioned = pb.GetUsageProvisioned()
 	msg.UsageRcvdBytes = pb.GetUsageRcvdBytes()
 	msg.UsageSentBytes = pb.GetUsageSentBytes()
+	msg.UsageRcvdBytesSecondary = pb.GetUsageRcvdBytesSecondary()
+	msg.UsageSentBytesSecondary = pb.GetUsageSentBytesSecondary()
 	msg.UsageTCPSessions = pb.GetUsageTCPSessions()
 	msg.UsageTLSSessions = pb.GetUsageTLSSessions()
 	msg.UsageRcvdNotes = pb.GetUsageRcvdNotes()
@@ -1258,16 +1406,8 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 	bytesRead += uint32(n)
 
 	// Process the header
-	isValidHeader, protobufLength, binaryLength := wireReadHeader(version[0], header)
-	if !isValidHeader {
-		err = fmt.Errorf("wire read: invalid protocol header")
-		return
-	}
-
-	// To help with the case in which someone is just sending crap to us, we do a length check
-	// to avoid having golang malloc an absurdly large value.
-	if protobufLength < 0 || protobufLength > 10000 {
-		err = fmt.Errorf("wire read: invalid protocol buffer length")
+	protobufLength, binaryLength, err := wireReadHeader(version[0], header)
+	if err != nil {
 		return
 	}
 
@@ -1296,6 +1436,13 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 			return
 		}
 		bytesRead += uint32(n)
+		// Before proceeding, bail if this is obviously an invalid protobuf
+		pb := NotehubPB{}
+		err = proto.Unmarshal(protobuf, &pb)
+		if err != nil {
+			err = fmt.Errorf("wire: protobuf validation: %s", err)
+			return
+		}
 	}
 
 	// Read the binary data, if it's present

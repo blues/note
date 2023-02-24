@@ -9,7 +9,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,6 +20,7 @@ import (
 
 // Handle inbound HTTP request to the "req" topic
 func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
+	ctx := httpReq.Context()
 	var err error
 
 	// Allow the default values for these parameters to be set in the URL.
@@ -34,9 +34,9 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 
 	// Get the requestbody
 	var reqJSON []byte
-	reqJSON, err = ioutil.ReadAll(httpReq.Body)
+	reqJSON, err = io.ReadAll(httpReq.Body)
 	if err != nil {
-		err = fmt.Errorf("Please supply a JSON request in the HTTP body")
+		err = fmt.Errorf("please supply a JSON request in the HTTP body")
 		io.WriteString(httpRsp, string(notelib.ErrorResponse(err)))
 		return
 	}
@@ -71,11 +71,11 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 	var rspJSON []byte
 	if err == nil {
 		var box *notelib.Notebox
-		box, err = notelib.OpenEndpointNotebox(hubEndpointID, deviceStorageObject, false)
+		box, err = notelib.OpenEndpointNotebox(ctx, hubEndpointID, deviceStorageObject, false)
 		if err == nil {
 			box.SetEventInfo(deviceUID, device.DeviceSN, device.ProductUID, appUID, notehubEvent, nil)
-			rspJSON = box.Request(hubEndpointID, reqJSON)
-			box.Close()
+			rspJSON = box.Request(ctx, hubEndpointID, reqJSON)
+			box.Close(ctx)
 		}
 	}
 
@@ -105,9 +105,7 @@ func httpArgs(req *http.Request, topic string) (target string, args map[string]s
 	}
 
 	// Make sure that the prefix is "/", else the pattern matcher is matching something we don't want
-	if strings.HasPrefix(target, "/") {
-		target = strings.TrimPrefix(target, "/")
-	}
+	target = strings.TrimPrefix(target, "/")
 
 	// See if there is a query, and if so process it
 	str := strings.SplitN(target, "?", 2)

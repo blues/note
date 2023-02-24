@@ -7,7 +7,7 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -34,7 +34,7 @@ func main() {
 		}
 		defer rsp.Body.Close()
 		var buf []byte
-		buf, err = ioutil.ReadAll(rsp.Body)
+		buf, err = io.ReadAll(rsp.Body)
 		if err != nil {
 			fmt.Printf("error fetching IP addr: %s", err)
 			return
@@ -43,8 +43,8 @@ func main() {
 	} else {
 		serverAddress = os.Args[1]
 	}
-	serverHTTPReqTopic := "/req"
-	serverPortHTTP := ":80"
+	serverHTTPReqTopic = "/req"
+	serverPortHTTP = ":80"
 	serverPortTCP = ":8081"
 	serverPortTCPS = ":8086"
 
@@ -72,4 +72,9 @@ func main() {
 		time.Sleep(5 * time.Minute)
 	}
 
+}
+
+// Get the directory containing keys
+func keyDirectory() string {
+	return os.Getenv("HOME") + "/note/keys/"
 }

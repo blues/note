@@ -30,6 +30,7 @@ type notefileDesc struct {
 	// Template info
 	BodyTemplate    string `json:"B,omitempty"`
 	PayloadTemplate uint32 `json:"P,omitempty"`
+	TemplateFormat  uint32 `json:"f,omitempty"`
 }
 
 type noteboxBody struct {
@@ -77,8 +78,6 @@ type Notebox struct {
 	defaultEventDeviceSN   string
 	defaultEventProductUID string
 	defaultEventAppUID     string
-	hubLocationService     string // The location service to use to find the hub
-	hubAppUID              string // The application UID to which to bind on the service
 	// For HTTP access control
 	clientHTTPReq *http.Request
 	clientHTTPRsp http.ResponseWriter
