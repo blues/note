@@ -11,9 +11,9 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math/big"
 	"net"
+	"os"
 	"time"
 
 	notelib "github.com/blues/note/lib"
@@ -28,12 +28,12 @@ func tcpsHandler() {
 	fmt.Printf("Serving requests on tcps:%s%s\n", serverAddress, serverPortTCPS)
 
 	// Load our certs
-	serviceCertFile, err := ioutil.ReadFile("security/hub.crt")
+	serviceCertFile, err := os.ReadFile(keyDirectory() + "hub.crt")
 	if err != nil {
 		fmt.Printf("tcps: error reading hub certificate: %s\n", err)
 		return
 	}
-	serviceKeyFile, err := ioutil.ReadFile("security/hub.key")
+	serviceKeyFile, err := os.ReadFile(keyDirectory() + "hub.key")
 	if err != nil {
 		fmt.Printf("tcps: error reading hub key: %s\n", err)
 		return
@@ -63,8 +63,7 @@ func tcpsHandler() {
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 	}
 
-	// Build the NameToCertificate from CommonName within each of the Certificates
-	tlsConfig.BuildNameToCertificate()
+	// Listen for incoming connect requests
 	connServer, err := TLSListen("tcp", serverPortTCPS, tlsConfig)
 	if err != nil {
 		fmt.Printf("tcps: error listening on port %s: %s\n", serverPortTCPS, err)
@@ -113,7 +112,6 @@ func printConnState(state tls.ConnectionState, message string) {
 	fmt.Printf("				  DidResume: %t\n", state.DidResume)
 	fmt.Printf("				CipherSuite: %x\n", state.CipherSuite)
 	fmt.Printf("		 NegotiatedProtocol: %s\n", state.NegotiatedProtocol)
-	fmt.Printf(" NegotiatedProtocolIsMutual: %t\n", state.NegotiatedProtocolIsMutual)
 	fmt.Printf("		  Certificate chain:\n")
 	for i, cert := range state.PeerCertificates {
 		subject := cert.Subject
@@ -178,7 +176,7 @@ func tlsAuthenticate(connSession net.Conn, device DeviceState) (err error) {
 	tlsst := tlsc.ConnectionState()
 
 	// Validate that the negotiation succeeded
-	if !tlsst.HandshakeComplete || !tlsst.NegotiatedProtocolIsMutual || len(tlsst.PeerCertificates) == 0 {
+	if !tlsst.HandshakeComplete || len(tlsst.PeerCertificates) == 0 {
 		printConnState(tlsc.ConnectionState(), device.DeviceUID)
 		return fmt.Errorf("tls: connection not complete")
 	}

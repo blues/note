@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/blues/note-go/note"
 	notelib "github.com/blues/note/lib"
+	olc "github.com/google/open-location-code/go"
+	"github.com/google/uuid"
 )
 
 // Event log directory
@@ -24,16 +27,14 @@ func eventLogInit(dir string) {
 }
 
 // Event handling procedure
-func notehubEvent(context interface{}, local bool, file *notelib.Notefile, event *note.Event) (err error) {
+func notehubEvent(ctx context.Context, context interface{}, local bool, file *notelib.Notefile, event *note.Event) (err error) {
 
 	// Retrieve the session context
-	var session *notelib.HubSessionContext
-	session = context.(*notelib.HubSessionContext)
+	session := context.(*notelib.HubSessionContext)
 
 	// If this is a queue and this is a template note, recursively expand it to multiple notifications
 	if event.Bulk {
-		var session *notelib.HubSessionContext
-		session = context.(*notelib.HubSessionContext)
+		session := context.(*notelib.HubSessionContext)
 		eventBulk(session, local, *file, *event)
 		return
 	}
@@ -45,7 +46,6 @@ func notehubEvent(context interface{}, local bool, file *notelib.Notefile, event
 
 	// Add info about session and when routed
 	event.TowerID = session.Session.CellID
-	event.Routed = time.Now().UTC().Unix()
 
 	// Marshal the event in a tightly-compressed manner, preparing to output it as Newline-Delimited JSON (NDJSON)
 	eventJSON, err := note.JSONMarshal(event)
@@ -81,29 +81,42 @@ func eventBulk(session *notelib.HubSessionContext, local bool, file notelib.Note
 		return err
 	}
 
-	// Decode the template
-	context, entries, err := notelib.BulkDecodeTemplate(bodyJSON, event.Payload)
+	// Begin decode of payload using this template
+	bdc, err := notelib.BulkDecodeTemplate(bodyJSON, event.Payload)
 	if err != nil {
 		return err
 	}
 
-	// Parse each entry of the payload
-	for i := 0; i < entries; i++ {
-		body, payload, when, where := notelib.BulkDecodeEntry(&context, i)
+	// Parse each entry within the payload
+	for {
 
-		// Genereate a new notification request
+		// Get the next entry (ignoring OLC until we are ready to support it)
+		body, payload, when, where, wherewhen, _, success := bdc.BulkDecodeNextEntry()
+		if !success {
+			break
+		}
+
+		// Generate a new notification request with a unique EventUID
 		nn := event
 		nn.Req = note.EventAdd
-		nn.When = when / 1000000000
+		nn.When = when
+		nn.WhereWhen = wherewhen
 		nn.Where = notelib.OLCFromINT64(where)
+		if nn.Where != "" {
+			area, err := olc.Decode(nn.Where)
+			if err == nil {
+				nn.WhereLat, nn.WhereLon = area.Center()
+			}
+		}
 		nn.Updates = 1
 		nn.Bulk = false
 		nn.Body = &body
 		nn.Payload = payload
-		notehubEvent(session, local, &file, &nn)
+		nn.EventUID = uuid.New().String()
+		notehubEvent(context.Background(), session, local, &file, &nn)
 
 	}
 
 	// Done
-	return
+	return nil
 }

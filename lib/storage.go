@@ -6,6 +6,7 @@
 package notelib
 
 import (
+	"context"
 	"fmt"
 )
 
@@ -14,20 +15,20 @@ import (
 // certain storage mechanisms that can support it (i.e. file systems),
 // however it may be completely ignored by other storage mechanisms
 // that only deal in terms of addresses, object IDs, or handles.
-type storageCreateFunc func(iStorageObjectHint string, iFileNameHint string) (storageObject string, err error)
+type storageCreateFunc func(ctx context.Context, iStorageObjectHint string, iFileNameHint string) (storageObject string, err error)
 
 // StorageCreateObjectFunc Creates a new storage object instance,
 // with the supplied storage object name being exact.
-type storageCreateObjectFunc func(storageObject string) (err error)
+type storageCreateObjectFunc func(ctx context.Context, storageObject string) (err error)
 
 // StorageDeleteFunc deletes an existing storage object instance
-type storageDeleteFunc func(iStorageObjectHint string, iObject string) (err error)
+type storageDeleteFunc func(ctx context.Context, iStorageObjectHint string, iObject string) (err error)
 
 // StorageWriteNotefileFunc writes a notefile to the specified storage instance
-type storageWriteNotefileFunc func(iNotefile *Notefile, iStorageObjectHint string, iObject string) (err error)
+type storageWriteNotefileFunc func(ctx context.Context, iNotefile *Notefile, iStorageObjectHint string, iObject string) (err error)
 
 // StorageReadNotefileFunc reads a notefile from the specified storage instance
-type storageReadNotefileFunc func(iStorageObjectHint string, iObject string) (oNotefile *Notefile, err error)
+type storageReadNotefileFunc func(ctx context.Context, iStorageObjectHint string, iObject string) (oNotefile *Notefile, err error)
 
 // storageClass is the access method by which we do physical I/O
 type storageClass struct {

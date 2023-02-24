@@ -615,6 +615,9 @@ var tznames = [...]string{
 	"WET",
 	"Zulu",
 	"Asia/Qostanay",
+	"America/Nuuk",
+	"America/Ciudad_Juarez",
+	"Europe/Kyiv",
 	"",
 }
 

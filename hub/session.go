@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 
@@ -15,6 +16,7 @@ import (
 
 // Process requests for the duration of a session being open
 func sessionHandler(connSession net.Conn, secure bool) {
+	ctx := context.Background()
 
 	// Keep track of this, from a resource consumption perspective
 	fmt.Printf("Opened session\n")
@@ -73,9 +75,10 @@ func sessionHandler(connSession net.Conn, secure bool) {
 
 		// Process the request
 		fmt.Printf("\nReceived %d-byte message from %s\n", len(request), sessionContext.DeviceUID)
-		response, err = notelib.HubRequest(&sessionContext, request, notehubEvent, &sessionContext)
+		var reqtype string
+		reqtype, response, err = notelib.HubRequest(ctx, &sessionContext, request, notehubEvent, &sessionContext)
 		if err != nil {
-			fmt.Printf("session: error processing request: %s\n", err)
+			fmt.Printf("session: error processing '%s' request: %s\n", reqtype, err)
 			break
 		}
 

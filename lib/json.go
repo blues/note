@@ -49,8 +49,8 @@ func (file *Notefile) uConvertToJSON(indent bool) (output []byte, err error) {
 	return
 }
 
-// convertToJSON serializes/marshals the in-memory Notefile into a JSON buffer
-func (file *Notefile) convertToJSON(indent bool) (output []byte, err error) {
+// ConvertToJSON serializes/marshals the in-memory Notefile into a JSON buffer
+func (file *Notefile) ConvertToJSON(indent bool) (output []byte, err error) {
 
 	// Lock for reading
 	nfLock.RLock()

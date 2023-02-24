@@ -5,8 +5,10 @@
 package notelib
 
 import (
+	"context"
+
 	"github.com/blues/note-go/note"
 )
 
 // EventFunc is the func to get called whenever there is a note add/update/delete
-type EventFunc func(context interface{}, local bool, file *Notefile, data *note.Event) (err error)
+type EventFunc func(ctx context.Context, context interface{}, local bool, file *Notefile, data *note.Event) (err error)

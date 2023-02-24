@@ -6,6 +6,7 @@
 package notelib
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -185,7 +186,7 @@ func fsPath(filename string) string {
 
 // Create a file system object within the folder suggested by storageHint, but without that folder
 // specified in the storageObject path returned.
-func fsCreate(storageHint string, filenameHint string) (storageObject string, err error) {
+func fsCreate(ctx context.Context, storageHint string, filenameHint string) (storageObject string, err error) {
 
 	// Find a path that doesn't yet exist
 	container, _ := fsNamesFromFileStorageObject(storageHint)
@@ -196,7 +197,7 @@ func fsCreate(storageHint string, filenameHint string) (storageObject string, er
 
 		for i := 1; ; i++ {
 
-			exists, err2 := fio.Exists(fsPath(name))
+			exists, err2 := fio.Exists(ctx, fsPath(name))
 			if err2 != nil {
 				err = err2
 				return
@@ -211,10 +212,19 @@ func fsCreate(storageHint string, filenameHint string) (storageObject string, er
 
 	}
 
-	// Create it, thus reserving its name
-	err = fio.Create(fsPath(name))
+	// Create it, thus reserving its name.  Note that if it exists we must overwrite it (as the
+	// comment above specifies).  This has the effect of self-healing rather than blocking
+	// operations where the high level file descriptor was lost and the file is now being recreated.
+	// (Note that this is particularly important when !cleanWithJSONExtension, else a new unique
+	// file object would have been created in that case.)
+	path := fsPath(name)
+	err = fio.Create(ctx, path)
 	if err != nil {
-		return
+		fio.Delete(ctx, path)
+		err = fio.Create(ctx, path)
+		if err != nil {
+			return
+		}
 	}
 
 	// Regenerate the name by removing the storage container
@@ -227,15 +237,21 @@ func fsCreate(storageHint string, filenameHint string) (storageObject string, er
 
 // Create a file system object given an explicit storage object name, assuming that this already has the
 // container within the storageObject specifier
-func fsCreateObject(storageObject string) (err error) {
-
+func fsCreateObject(ctx context.Context, storageObject string) (err error) {
 	// Get the filename from the storage object name
 	name := fsRemoveScheme(storageObject)
 
-	// Create it, thus reserving it
-	err = fio.Create(fsPath(name))
+	// Create it (and overwrite it if it already exists), thus reserving it.  In normal cases
+	// we don't try to create an object that already exists, and so the fact that we overwrite
+	// is simply defensive coding.
+	path := fsPath(name)
+	err = fio.Create(ctx, path)
 	if err != nil {
-		return
+		fio.Delete(ctx, path)
+		err = fio.Create(ctx, path)
+		if err != nil {
+			return
+		}
 	}
 
 	// Done
@@ -268,12 +284,12 @@ func fsObjectsToPath(iContainer string, iObject string) string {
 }
 
 // Delete a file system object
-func fsDelete(container string, object string) (err error) {
-	return fio.Delete(fsObjectsToPath(container, object))
+func fsDelete(ctx context.Context, container string, object string) (err error) {
+	return fio.Delete(ctx, fsObjectsToPath(container, object))
 }
 
 // Writes a notefile to the specified file
-func fsWriteNotefile(file *Notefile, container string, object string) (err error) {
+func fsWriteNotefile(ctx context.Context, file *Notefile, container string, object string) (err error) {
 
 	// Convert to JSON
 	jsonNotefile, err := file.uConvertToJSON(true)
@@ -284,7 +300,7 @@ func fsWriteNotefile(file *Notefile, container string, object string) (err error
 
 	// Open the file, truncating it
 	path := fsObjectsToPath(container, object)
-	err = fio.WriteJSON(path, jsonNotefile)
+	err = fio.WriteJSON(ctx, path, jsonNotefile)
 	if err != nil {
 		return
 	}
@@ -300,11 +316,11 @@ func fsWriteNotefile(file *Notefile, container string, object string) (err error
 }
 
 // Reads a notefile from the specified file
-func fsReadNotefile(container string, object string) (notefile *Notefile, err error) {
+func fsReadNotefile(ctx context.Context, container string, object string) (notefile *Notefile, err error) {
 
 	// Read the file
 	path := fsObjectsToPath(container, object)
-	contents, err := fio.ReadJSON(path)
+	contents, err := fio.ReadJSON(ctx, path)
 	if err != nil {
 		return &Notefile{}, err
 	}

@@ -57,6 +57,12 @@ message NotehubPB {
     optional uint32 HighPowerCyclesTotal = 47;
     optional uint32 HighPowerCyclesData = 48;
     optional uint32 HighPowerCyclesGPS = 49;
+    optional string DeviceSKU = 50;
+    optional int64 DeviceFirmware = 51;
+    optional string DevicePIN = 52;
+    optional string DeviceOrderingCode = 53;
+    optional uint32 UsageRcvdBytesSecondary = 54;
+    optional uint32 UsageSentBytesSecondary = 55;
 
 }
 

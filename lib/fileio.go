@@ -6,25 +6,25 @@
 package notelib
 
 import (
-	"io/ioutil"
+	"context"
 	"os"
 	"strings"
 )
 
 // FileioExistsFunc checks for file existence
-type FileioExistsFunc func(path string) (exists bool, err error)
+type FileioExistsFunc func(ctx context.Context, path string) (exists bool, err error)
 
 // FileioDeleteFunc deletes a file
-type FileioDeleteFunc func(path string) (err error)
+type FileioDeleteFunc func(ctx context.Context, path string) (err error)
 
 // FileioCreateFunc creates a file
-type FileioCreateFunc func(path string) (err error)
+type FileioCreateFunc func(ctx context.Context, path string) (err error)
 
 // FileioWriteJSONFunc writes a JSON file
-type FileioWriteJSONFunc func(path string, data []byte) (err error)
+type FileioWriteJSONFunc func(ctx context.Context, path string, data []byte) (err error)
 
 // FileioReadJSONFunc reads a JSON file
-type FileioReadJSONFunc func(path string) (data []byte, err error)
+type FileioReadJSONFunc func(ctx context.Context, path string) (data []byte, err error)
 
 // Fileio defines a set of functions for alternative file I/O
 type Fileio struct {
@@ -44,7 +44,7 @@ var fileioDefault = Fileio{
 }
 
 // See if a file exists
-func fileioExists(path string) (exists bool, err error) {
+func fileioExists(ctx context.Context, path string) (exists bool, err error) {
 	exists = true
 	_, err = os.Stat(path)
 	if err != nil {
@@ -57,12 +57,12 @@ func fileioExists(path string) (exists bool, err error) {
 }
 
 // Delete a file
-func fileioDelete(path string) (err error) {
+func fileioDelete(ctx context.Context, path string) (err error) {
 	return os.Remove(path)
 }
 
 // Create a file and write it
-func fileioCreate(path string) (err error) {
+func fileioCreate(ctx context.Context, path string) (err error) {
 
 	str := strings.Split(path, "/")
 	if len(str) > 1 {
@@ -70,12 +70,12 @@ func fileioCreate(path string) (err error) {
 		os.MkdirAll(folder, 0777)
 	}
 
-	return fileioWriteJSON(path, []byte("{}"))
+	return fileioWriteJSON(ctx, path, []byte("{}"))
 
 }
 
 // Write an existing JSON file
-func fileioWriteJSON(path string, data []byte) (err error) {
+func fileioWriteJSON(ctx context.Context, path string, data []byte) (err error) {
 
 	fd, err2 := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0666)
 	if err2 != nil {
@@ -99,7 +99,7 @@ func fileioWriteJSON(path string, data []byte) (err error) {
 }
 
 // Read an existing file
-func fileioReadJSON(path string) (data []byte, err error) {
-	data, err = ioutil.ReadFile(path)
+func fileioReadJSON(ctx context.Context, path string) (data []byte, err error) {
+	data, err = os.ReadFile(path)
 	return
 }

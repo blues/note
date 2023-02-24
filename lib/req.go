@@ -5,7 +5,9 @@
 package notelib
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/blues/note-go/note"
@@ -13,7 +15,7 @@ import (
 )
 
 // Request performs a local operation using the JSON API
-func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) {
+func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []byte) (rspJSON []byte) {
 	var err error
 	req := notecard.Request{}
 	rsp := notecard.Request{}
@@ -61,7 +63,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		}
 		for notefileID, notefileInfo := range *req.FileInfo {
 			if !NotefileIDIsReservedWithExceptions(notefileID) {
-				err = box.AddNotefile(notefileID, &notefileInfo)
+				err = box.AddNotefile(ctx, notefileID, &notefileInfo)
 				if err != nil && rsp.Err == "" {
 					rsp.Err = fmt.Sprintf("error adding notefile: %s", err)
 					break
@@ -82,7 +84,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		deleteFiles := *req.Files
 		for i := range deleteFiles {
 			if !NotefileIDIsReservedWithExceptions(deleteFiles[i]) {
-				err = box.DeleteNotefile(deleteFiles[i])
+				err = box.DeleteNotefile(ctx, deleteFiles[i])
 				if err != nil && rsp.Err == "" {
 					rsp.Err = fmt.Sprintf("error deleting %s: %s", deleteFiles[i], err)
 					break
@@ -115,14 +117,14 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			break
 		}
 		if !box.NotefileExists(req.NotefileID) {
-			err = box.AddNotefile(req.NotefileID, nil)
+			err = box.AddNotefile(ctx, req.NotefileID, nil)
 			if err != nil {
 				rsp.Err = fmt.Sprintf("%s", err)
 				break
 			}
 		}
 		// Check the noteID
-		isQueue, toHub, fromHub, _, _, _ := NotefileAttributesFromID(req.NotefileID)
+		isQueue, toHub, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
 		if req.NoteID == "" {
 			if !isQueue {
 				rsp.Err = "note ID is required when using a database notefile"
@@ -134,10 +136,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 				break
 			}
 		}
-		if isQueue && toHub && !fromHub {
-			rsp.Err = "can't add note to an outbound queue"
-			break
-		}
 		// Add the note
 		xnote := note.Note{}
 		if req.Payload != nil {
@@ -147,13 +145,22 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			xnote.Body = *req.Body
 		}
 		if req.Allow {
-			err = box.AddNote(endpointID, req.NotefileID, req.NoteID, xnote)
+			err = box.AddNote(ctx, endpointID, req.NotefileID, req.NoteID, xnote)
 		} else {
-			err = box.addNoteLimited(endpointID, req.NotefileID, req.NoteID, xnote)
+			err = box.addNoteLimited(ctx, endpointID, req.NotefileID, req.NoteID, xnote)
 		}
 		if err != nil {
 			rsp.Err = fmt.Sprintf("%s", err)
 			break
+		}
+		// If this is an outbound queue, purge ALL tombstones from the
+		// file that would normally have been purged during sync/merge
+		if isQueue && toHub {
+			openfile, file, err := box.OpenNotefile(ctx, req.NotefileID)
+			if err == nil {
+				file.PurgeTombstones("*")
+				openfile.Close(ctx)
+			}
 		}
 
 	case notecard.ReqNoteUpdate:
@@ -166,7 +173,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			break
 		}
 		if !box.NotefileExists(req.NotefileID) {
-			err = box.AddNotefile(req.NotefileID, nil)
+			err = box.AddNotefile(ctx, req.NotefileID, nil)
 			if err != nil {
 				rsp.Err = fmt.Sprintf("%s", err)
 				break
@@ -182,7 +189,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			break
 		}
 		var xnote note.Note
-		xnote, err = box.GetNote(req.NotefileID, req.NoteID)
+		xnote, err = box.GetNote(ctx, req.NotefileID, req.NoteID)
 		if err != nil {
 			if req.Payload != nil {
 				xnote.Payload = *req.Payload
@@ -190,7 +197,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			if req.Body != nil {
 				xnote.Body = *req.Body
 			}
-			err = box.AddNote(endpointID, req.NotefileID, req.NoteID, xnote)
+			err = box.AddNote(ctx, endpointID, req.NotefileID, req.NoteID, xnote)
 			if err != nil {
 				rsp.Err = fmt.Sprintf("error adding note: %s", err)
 				break
@@ -207,7 +214,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		} else {
 			xnote.Body = nil
 		}
-		err = box.UpdateNote(endpointID, req.NotefileID, req.NoteID, xnote)
+		err = box.UpdateNote(ctx, endpointID, req.NotefileID, req.NoteID, xnote)
 		if err != nil {
 			rsp.Err = fmt.Sprintf("error updating note: %s", err)
 			break
@@ -231,7 +238,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			rsp.Err = "no note ID specified"
 			break
 		}
-		err = box.DeleteNote(endpointID, req.NotefileID, req.NoteID)
+		err = box.DeleteNote(ctx, endpointID, req.NotefileID, req.NoteID)
 		if err != nil {
 			rsp.Err = fmt.Sprintf("error deleting note: %s", err)
 			break
@@ -264,22 +271,22 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		}
 		// Handle queues by getting the LRU note
 		if isQueue && toHub && req.NoteID == "" {
-			openfile, file, err2 := box.OpenNotefile(req.NotefileID)
+			openfile, file, err2 := box.OpenNotefile(ctx, req.NotefileID)
 			if err2 != nil {
 				rsp.Err = fmt.Sprintf("%s", err2)
 				break
 			}
 			req.NoteID, err = file.GetLeastRecentNoteID()
 			if err != nil {
-				openfile.Close()
+				openfile.Close(ctx)
 				rsp.Err = fmt.Sprintf("%s", err)
 				break
 			}
-			openfile.Close()
+			openfile.Close(ctx)
 		}
 		// Get the note
 		var xnote note.Note
-		xnote, err = box.GetNote(req.NotefileID, req.NoteID)
+		xnote, err = box.GetNote(ctx, req.NotefileID, req.NoteID)
 		if err != nil {
 			rsp.Err = fmt.Sprintf("error getting note: %s", err)
 			break
@@ -301,13 +308,15 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		}
 		if xnote.Histories != nil && len(*xnote.Histories) > 0 {
 			histories := *xnote.Histories
-			rsp.Time = histories[0].When
-			if rsp.Time < 1483228800 { // 1/1/2017
+
+			if histories[0].When < 1483228800 || histories[0].When > math.MaxUint32 { // before 1/1/2017 or can't fit into a uint32
 				rsp.Time = 0
+			} else {
+				rsp.Time = histories[0].When
 			}
 		}
 		if req.Delete {
-			box.DeleteNote(endpointID, req.NotefileID, req.NoteID)
+			box.DeleteNote(ctx, endpointID, req.NotefileID, req.NoteID)
 		}
 
 	case notecard.ReqFileGetL:
@@ -362,13 +371,25 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			}
 
 			// Get the changed notefiles for that tracker
-			notefiles, err = box.GetChangedNotefiles(req.TrackerID)
+			notefiles, err = box.GetChangedNotefiles(ctx, req.TrackerID)
 			if err != nil {
 				rsp.Err = fmt.Sprintf("cannot get list of changed notefiles: %s", err)
 				break
 			}
 
 		}
+
+		// Prune the list of notefiles based on whether or not the user's perception is
+		// that they should ever even exist on the notehub. The obvious things we're trying to skim off
+		// are .qo, .qos, and anything ending in 'x' which is a local-only file
+		newNotefiles := []string{}
+		for _, file := range notefiles {
+			isQueue, syncToHub, syncFromHub, _, _, _ := NotefileAttributesFromID(file)
+			if !(isQueue && syncToHub) && (syncToHub || syncFromHub) {
+				newNotefiles = append(newNotefiles, file)
+			}
+		}
+		notefiles = newNotefiles
 
 		// Prune the list of notefiles based on the input
 		if req.Files != nil && len(*req.Files) != 0 {
@@ -409,7 +430,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 
 			// Get the number of pending changes.  Note that if we didn't supply a tracker,
 			// we supply all the results even if there are 0 changes (0 notes) in the notefile.
-			openfile, file, err := box.OpenNotefile(notefileID)
+			openfile, file, err := box.OpenNotefile(ctx, notefileID)
 			if err != nil {
 				rsp.Err = fmt.Sprintf("error opening notefile %s to get changes: %s", notefileID, err)
 				break
@@ -431,7 +452,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 				total += totalNotes
 				fileinfoArray[notefileID] = fileinfo
 			}
-			openfile.Close()
+			openfile.Close(ctx)
 
 		}
 
@@ -446,7 +467,6 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 
 		// Return whether or not pending
 		rsp.Pending = req.Pending && rsp.Changes > 0
-		break
 
 	case notecard.ReqNotesGetL:
 		fallthrough
@@ -487,12 +507,12 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			break
 		}
 		if NotefileIDIsReservedWithExceptions(req.NotefileID) && !req.Allow {
-			rsp.Err = fmt.Sprintf("reserved notefile name")
+			rsp.Err = "reserved notefile name"
 			break
 		}
 
 		// Open the notefile
-		openfile, file, err := box.OpenNotefile(req.NotefileID)
+		openfile, file, err := box.OpenNotefile(ctx, req.NotefileID)
 		if err != nil {
 			rsp.Err = fmt.Sprintf("error opening notefile: %s", err)
 			break
@@ -509,7 +529,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 			if req.Stop && updateTracker {
 				file.DeleteTracker(req.TrackerID)
 			}
-			openfile.Close()
+			openfile.Close(ctx)
 			rsp.Err = fmt.Sprintf("cannot get list of changed notes: %s", err)
 			break
 		}
@@ -570,7 +590,7 @@ func (box *Notebox) Request(endpointID string, reqJSON []byte) (rspJSON []byte) 
 		rsp.Total = int32(totalNotes)
 
 		// Close the notefile
-		openfile.Close()
+		openfile.Close(ctx)
 
 	}
 

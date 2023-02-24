@@ -16,8 +16,6 @@ import (
 
 // updateNote performs the bulk of Note Update, Delete, Merge operations
 func updateNote(xnote *note.Note, endpointID string, resolveConflicts bool, deleted bool) {
-	var when int64
-	var where string
 
 	updates := xnote.Updates + 1
 	sequence := updates
@@ -44,7 +42,7 @@ func updateNote(xnote *note.Note, endpointID string, resolveConflicts bool, dele
 	xnote.Histories = &newHistories
 
 	// Create a new history
-	newHistory := newHistory(endpointID, when, where, sequence)
+	newHistory := newHistory(endpointID, 0, "", 0, sequence)
 
 	// Insert newHistory at offset 0, then append the old history
 	histories := copyOrCreateBlankHistory(nil)
@@ -141,11 +139,12 @@ func updateNote(xnote *note.Note, endpointID string, resolveConflicts bool, dele
 }
 
 // compareModified compares two Notes, and returns
-//     1 if local note is newer than incoming note
-//    -1 if incoming note is newer than local note
-//     0 if notes are equal
-//  conflictDataDiffers is returned as true if they
-//     are equal but their conflict data is different
+//
+//	   1 if local note is newer than incoming note
+//	  -1 if incoming note is newer than local note
+//	   0 if notes are equal
+//	conflictDataDiffers is returned as true if they
+//	   are equal but their conflict data is different
 func compareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffers bool, result int) {
 
 	if incomingNote.Updates > xnote.Updates {
@@ -298,12 +297,12 @@ func copyOrCreateNonblankHistory(historiesToCopy *[]note.History) []note.History
 		return *historiesToCopy
 	}
 	histories := []note.History{}
-	histories = append(histories, newHistory("", 0, "", 0))
+	histories = append(histories, newHistory("", 0, "", 0, 0))
 	return histories
 }
 
 // newHistory creates a history entry for a Note being modified
-func newHistory(endpointID string, when int64, where string, sequence int32) note.History {
+func newHistory(endpointID string, when int64, where string, wherewhen int64, sequence int32) note.History {
 
 	newHistory := note.History{}
 	newHistory.EndpointID = endpointID
@@ -317,8 +316,10 @@ func newHistory(endpointID string, when int64, where string, sequence int32) not
 	if where == "" {
 		// On the service we don't have a location
 		newHistory.Where = ""
+		newHistory.WhereWhen = 0
 	} else {
 		newHistory.Where = where
+		newHistory.WhereWhen = wherewhen
 	}
 
 	newHistory.Sequence = sequence
@@ -363,7 +364,7 @@ func Merge(localNote *note.Note, incomingNote *note.Note) note.Note {
 	for index := 0; index < len(mergeResultNotes); index++ {
 		mergeResultNote := mergeResultNotes[index]
 		_, compareResult := compareModified(*winnerNote, mergeResultNote)
-		if 0 == compareResult {
+		if compareResult == 0 {
 			continue
 		}
 		winnerNoteConflicts = append(winnerNoteConflicts, mergeResultNote)
@@ -418,7 +419,7 @@ func mergeNotes(outerNotes *[]note.Note, innerNotes *[]note.Note, mergeNotes *[]
 		needToAssignWinner := (winnerNote == nil)
 		if !needToAssignWinner {
 			_, compareResult := compareModified(*winnerNote, (*outerNotes)[outerNotesIndex])
-			needToAssignWinner = (-1 == compareResult)
+			needToAssignWinner = (compareResult == -1)
 		}
 		if needToAssignWinner {
 			winnerNote = &outerNote
