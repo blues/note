@@ -2,8 +2,6 @@ module github.com/blues/note
 
 go 1.19
 
-replace github.com/blues/note-go => ../note-go
-
 require (
 	github.com/blues/note-go v1.7.0
 	github.com/golang/snappy v0.0.4
