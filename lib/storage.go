@@ -42,7 +42,6 @@ type storageClass struct {
 
 // Storage creates a storage object from the class in an object string
 func storageProvider(iObject string) (storage storageClass, err error) {
-
 	// Enumerate known storage providers
 	if isFileStorage(iObject) {
 		return fileStorage(), nil
@@ -50,5 +49,4 @@ func storageProvider(iObject string) (storage storageClass, err error) {
 
 	// Not found
 	return storageClass{}, fmt.Errorf("storage provider not found: %s", iObject)
-
 }

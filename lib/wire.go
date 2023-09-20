@@ -17,31 +17,36 @@ import (
 	"github.com/blues/note-go/note"
 	"github.com/blues/note-go/notecard"
 	"github.com/golang/snappy"
+	olc "github.com/google/open-location-code/go"
 	"google.golang.org/protobuf/proto"
 )
 
 // Available JSON compression formats.
-const jc0 = byte(0) // no compression
-const jc1 = byte(1) // replace the 5 json strings
-const jc2 = byte(2) // replace the 5 json strings, then apply Snappy
-const jc3 = byte(3) // json string subst table at top, replace the 5 or 6 json strings, then apply Snappy
-const jcCurrent = jc3
+const (
+	jc0       = byte(0) // no compression
+	jc1       = byte(1) // replace the 5 json strings
+	jc2       = byte(2) // replace the 5 json strings, then apply Snappy
+	jc3       = byte(3) // json string subst table at top, replace the 5 or 6 json strings, then apply Snappy
+	jcCurrent = jc3
+)
 
 // JSON compression strings
-const from3 = "\":{"
-const from4 = "},\""
-const from5 = "\":"
-const from6 = ",\""
-const from7 = "}}"
-const from8 = "true"
-const to1 = "\001"
-const to2 = "\002"
-const to3 = "\003"
-const to4 = "\004"
-const to5 = "\005"
-const to6 = "\006"
-const to7 = "\007"
-const to8 = "\010"
+const (
+	from3 = "\":{"
+	from4 = "},\""
+	from5 = "\":"
+	from6 = ",\""
+	from7 = "}}"
+	from8 = "true"
+	to1   = "\001"
+	to2   = "\002"
+	to3   = "\003"
+	to4   = "\004"
+	to5   = "\005"
+	to6   = "\006"
+	to7   = "\007"
+	to8   = "\010"
+)
 
 // Debug
 var debugWireRead = false
@@ -75,14 +80,12 @@ func scanForJSONValue(buf []byte, field string) (tokenBuf []byte) {
 
 		// If we've not yet grabbed our first token, grab the entire thing
 		if len(tokenBuf) == 0 {
-
 			// For us to start looking for commonalities in a token,
 			// it must be at least this many characters of savings.
 			if (len(token) - scanForLen) >= 5 {
 				tokenBuf = token
 				occurrences = 1
 			}
-
 		} else {
 
 			// Look for the longest token that we still have in common
@@ -110,7 +113,7 @@ func scanForJSONValue(buf []byte, field string) (tokenBuf []byte) {
 	}
 
 	if debugCompress {
-		debugf("#### longest token (%d) occurrences %d savings %d: %s\n",
+		logDebug("#### longest token (%d) occurrences %d savings %d: %s",
 			len(tokenBuf), occurrences, (occurrences*len(tokenBuf))-occurrences, tokenBuf)
 	}
 
@@ -120,7 +123,6 @@ func scanForJSONValue(buf []byte, field string) (tokenBuf []byte) {
 // Compress a byte array known to contain JSON.  Note that we don't do any compression
 // beyond 07 because old firmware doesn't support it.
 func jsonCompress(normal []byte) (compressed []byte, err error) {
-
 	// Begin generating output by using header byte specifying what kind of compression.
 	// If it becomes advantageous to do so, this can be determined dynamically based upon
 	// the compressability of the data using different algorithms.
@@ -133,7 +135,7 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 
 		// Debug
 		if debugCompress {
-			debugf("JSON no compression (%d)\n", len(normal)+1)
+			logDebug("JSON no compression (%d)", len(normal)+1)
 		}
 
 		return
@@ -183,7 +185,7 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 
 	// JSON compression followed by Snappy compression
 	if debugCompress {
-		debugf("  JSON compressed from %d to %d\n", len(normal), len(jcompressed))
+		logDebug("  JSON compressed from %d to %d", len(normal), len(jcompressed))
 	}
 
 	// Snappy
@@ -192,7 +194,7 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 		compressed = append(compressed, jcompressed...)
 
 		if debugCompress {
-			debugf(" plus header byte from %d to %d\n", len(jcompressed), len(compressed))
+			logDebug(" plus header byte from %d to %d", len(jcompressed), len(compressed))
 		}
 
 	} else {
@@ -201,19 +203,17 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 		compressed = append(compressed, scompressed...)
 
 		if debugCompress {
-			debugf("      plus Snappy from %d to %d\n", len(jcompressed), len(scompressed))
-			debugf(" plus header byte from %d to %d\n", len(scompressed), len(compressed))
+			logDebug("      plus Snappy from %d to %d", len(jcompressed), len(scompressed))
+			logDebug(" plus header byte from %d to %d", len(scompressed), len(compressed))
 		}
 
 	}
 
 	return
-
 }
 
 // Decompress a byte array known to contain JSON.  Note that we support 08 as of 11/01/2020.
 func jsonDecompress(compressed []byte) (normal []byte, err error) {
-
 	// Remove header byte
 	if len(compressed) == 0 {
 		return nil, fmt.Errorf("json decompression error: 0-length data")
@@ -228,20 +228,18 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 
 		// Debug
 		if debugCompress {
-			debugf("No decompression (%d)\n", len(normal))
+			logDebug("No decompression (%d)", len(normal))
 		}
 		return
 	}
 
 	if debugCompress {
-		debugf(" Removed header byte from %d to %d\n", len(compressed)+1, len(compressed))
+		logDebug(" Removed header byte from %d to %d", len(compressed)+1, len(compressed))
 	}
 
 	sdecompressed := compressed
 	if compressionType == jc1 {
-
 		// only json
-
 	} else if compressionType == jc2 || compressionType == jc3 {
 
 		// Snappy decompress
@@ -251,13 +249,11 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 		}
 
 		if debugCompress {
-			debugf(" Snappy decompressed from %d to %d\n", len(compressed), len(sdecompressed))
+			logDebug(" Snappy decompressed from %d to %d", len(compressed), len(sdecompressed))
 		}
 
 	} else {
-
 		return nil, fmt.Errorf("json decompression error: unknown compression type: 0x%02x", compressionType)
-
 	}
 
 	// JSON decompress
@@ -316,35 +312,35 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 
 	// Debug
 	if debugCompress {
-		debugf("           then JSON from %d to %d\n", len(sdecompressed), len(jdecompressed))
+		logDebug("           then JSON from %d to %d", len(sdecompressed), len(jdecompressed))
 	}
 
 	normal = jdecompressed
 	return
-
 }
 
 // SetNotefile sets the notefile within the a notehubMessage data structure
-func (msg *notehubMessage) SetNotefile(notefile Notefile) error {
-
+func (msg *notehubMessage) SetNotefile(notefile *Notefile) error {
 	// Set compressed form
 	JSON, err := note.JSONMarshal(notefile)
 	if err != nil {
 		return err
 	}
-	msg.cf = &cf{}
+	if msg.cf == nil {
+		msg.cf = &cf{}
+	}
 	msg.cf.Notefile, err = jsonCompress(JSON)
 
 	return err
 }
 
 // GetNotefile gets the notefile from within the a notehubMessage data structure
-func (msg *notehubMessage) GetNotefile() (notefile Notefile, err error) {
-	notefile = Notefile{}
+func (msg *notehubMessage) GetNotefile() (notefile *Notefile, err error) {
+	notefile = &Notefile{}
 
 	// If native is available, return it, else decompress
 	if msg.nf != nil && msg.nf.Notefile != nil {
-		notefile = *msg.nf.Notefile
+		notefile = msg.nf.Notefile
 	} else {
 		if msg.cf == nil || len(msg.cf.Notefile) == 0 {
 			return
@@ -354,7 +350,7 @@ func (msg *notehubMessage) GetNotefile() (notefile Notefile, err error) {
 			err = err2
 			return
 		}
-		err = note.JSONUnmarshal(jdata, &notefile)
+		err = note.JSONUnmarshal(jdata, notefile)
 		if err != nil {
 			return
 		}
@@ -373,10 +369,11 @@ func (msg *notehubMessage) GetNotefile() (notefile Notefile, err error) {
 }
 
 // SetNotefiles sets the notefile list within the a notehubMessage data structure
-func (msg *notehubMessage) SetNotefiles(notefiles map[string]Notefile) error {
-
+func (msg *notehubMessage) SetNotefiles(notefiles map[string]*Notefile) error {
 	// Set native form
-	msg.nf = &nf{}
+	if msg.nf == nil {
+		msg.nf = &nf{}
+	}
 	msg.nf.Notefiles = &notefiles
 
 	// Set compressed form
@@ -384,15 +381,17 @@ func (msg *notehubMessage) SetNotefiles(notefiles map[string]Notefile) error {
 	if err != nil {
 		return err
 	}
-	msg.cf = &cf{}
+	if msg.cf == nil {
+		msg.cf = &cf{}
+	}
 	msg.cf.Notefiles, err = jsonCompress(JSON)
 
 	return err
 }
 
 // GetNotefiles gets the multi-notefile structure from within the a notehubMessage
-func (msg *notehubMessage) GetNotefiles() (notefiles map[string]Notefile, err error) {
-	notefiles = map[string]Notefile{}
+func (msg *notehubMessage) GetNotefiles() (notefiles map[string]*Notefile, err error) {
+	notefiles = map[string]*Notefile{}
 
 	// If native is available, return it, else decompress
 	if msg.nf != nil && msg.nf.Notefiles != nil {
@@ -406,7 +405,7 @@ func (msg *notehubMessage) GetNotefiles() (notefiles map[string]Notefile, err er
 			err = err2
 			return
 		}
-		err = note.JSONUnmarshal(jdata, &notefiles)
+		err = note.JSONUnmarshal(jdata, notefiles)
 		if err != nil {
 			return
 		}
@@ -424,14 +423,14 @@ func (msg *notehubMessage) GetNotefiles() (notefiles map[string]Notefile, err er
 
 	// Done
 	return
-
 }
 
 // SetBody sets the body within the a notehubMessage data structure
 func (msg *notehubMessage) SetBody(body map[string]interface{}) error {
-
 	// Set native form
-	msg.nf = &nf{}
+	if msg.nf == nil {
+		msg.nf = &nf{}
+	}
 	msg.nf.Body = &body
 
 	// Set compressed form
@@ -439,7 +438,9 @@ func (msg *notehubMessage) SetBody(body map[string]interface{}) error {
 	if err != nil {
 		return err
 	}
-	msg.cf = &cf{}
+	if msg.cf == nil {
+		msg.cf = &cf{}
+	}
 	msg.cf.Body, err = jsonCompress(JSON)
 
 	return err
@@ -470,21 +471,22 @@ func (msg *notehubMessage) GetBody() (body map[string]interface{}, err error) {
 }
 
 // SetPayload sets the payload within the a notehubMessage data structure
-func (msg *notehubMessage) SetPayload(payload []byte) error {
-
+func (msg *notehubMessage) SetPayload(payload []byte) {
 	// Set native form
-	msg.nf = &nf{}
+	if msg.nf == nil {
+		msg.nf = &nf{}
+	}
 	msg.nf.Payload = &payload
 
 	// Set compressed form
-	msg.cf = &cf{}
+	if msg.cf == nil {
+		msg.cf = &cf{}
+	}
 	msg.cf.Payload = payload
-
-	return nil
 }
 
 // GetPayload gets the payload from within the a notehubMessage
-func (msg *notehubMessage) GetPayload() (payload []byte, err error) {
+func (msg *notehubMessage) GetPayload() (payload []byte) {
 	payload = []byte{}
 
 	// If native is available, return it
@@ -503,7 +505,6 @@ func (msg *notehubMessage) GetPayload() (payload []byte, err error) {
 
 // wireReadVersionByte reads the initial byte of a stream to validate version
 func wireProcessVersionByte(version byte) (isValid bool, headerLength int) {
-
 	switch version {
 
 	// 1 byte version == 0
@@ -555,12 +556,10 @@ func wireProcessVersionByte(version byte) (isValid bool, headerLength int) {
 	}
 
 	return false, 0
-
 }
 
 // wireMake creates a header from the specified parameters
 func wireMake(protobuf *[]byte, binary *[]byte) (out []byte) {
-
 	protobufLength := len(*protobuf)
 	binaryLength := len(*binary)
 
@@ -616,12 +615,10 @@ func wireMake(protobuf *[]byte, binary *[]byte) (out []byte) {
 
 	// Done
 	return
-
 }
 
 // msgToWire converts a request to wire format
 func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
-
 	// Create the PB header
 	pb := NotehubPB{}
 	if msg.Version != 0 {
@@ -663,6 +660,12 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	}
 	if msg.HubEndpointID != "" {
 		pb.HubEndpointID = &msg.HubEndpointID
+	}
+	if msg.Where != "" {
+		pb.Where = &msg.Where
+	}
+	if msg.WhereWhen != 0 {
+		pb.WhereWhen = &msg.WhereWhen
 	}
 	if msg.HubSessionHandler != "" {
 		pb.HubSessionHandler = &msg.HubSessionHandler
@@ -709,6 +712,9 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	}
 	if msg.ContinuousSession {
 		pb.ContinuousSession = &msg.ContinuousSession
+	}
+	if msg.SuppressResponse {
+		pb.SuppressResponse = &msg.SuppressResponse
 	}
 	if msg.Voltage100 != 0 {
 		pb.Voltage100 = &msg.Voltage100
@@ -839,7 +845,6 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	wirelen = len(wire)
 
 	return
-
 }
 
 // wireProcessHeader extracts protocol buffer and binary lengths from the header
@@ -946,7 +951,6 @@ func u32min(x, y uint32) uint32 {
 
 // WireBarsFromSession extracts device's perception of the number of bars of signal from a session
 func WireBarsFromSession(session *HubSessionContext) (rat string, bars uint32) {
-
 	// Return the rat for the session
 	rat = session.Session.Rat
 
@@ -1004,23 +1008,23 @@ func WireBarsFromSession(session *HubSessionContext) (rat string, bars uint32) {
 
 	// Done
 	return
-
 }
 
 // WireExtractSessionContext extracts session context from the wire message
-func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err error) {
-	req := notehubMessage{}
+func WireExtractSessionContext(wire []byte, session *HubSessionContext) (suppressResponse bool, err error) {
+	var req notehubMessage
 	req, _, err = msgFromWire(wire)
 	if err != nil {
 		return
 	}
-	session.DeviceUID = req.DeviceUID
-	session.DeviceSN = req.DeviceSN
+	suppressResponse = req.SuppressResponse
+	session.Session.DeviceUID = req.DeviceUID
+	session.Session.DeviceSN = req.DeviceSN
+	session.Session.ProductUID = req.ProductUID
 	session.DeviceSKU = req.DeviceSKU
 	session.DeviceOrderingCode = req.DeviceOrderingCode
 	session.DeviceFirmware = req.DeviceFirmware
 	session.DevicePIN = req.DevicePIN
-	session.ProductUID = req.ProductUID
 	session.DeviceEndpointID = req.DeviceEndpointID
 	session.HubEndpointID = req.HubEndpointID
 	session.HubSessionTicket = req.HubSessionTicket
@@ -1055,6 +1059,14 @@ func WireExtractSessionContext(wire []byte, session *HubSessionContext) (err err
 	session.Session.ContinuousSession = req.ContinuousSession
 	if req.MessageType == msgDiscover {
 		session.Discovery = true
+	}
+	if req.Where != "" {
+		session.Session.WhereOLC = req.Where
+		session.Session.WhereWhen = req.WhereWhen
+		area, err := olc.Decode(session.Session.WhereOLC)
+		if err == nil {
+			session.Session.WhereLat, session.Session.WhereLon = area.Center()
+		}
 	}
 
 	// This complicated sequence is to perform this Sscanf, except that golang's Sscanf is so aggressive
@@ -1231,6 +1243,8 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.HubSessionFactoryResetID = pb.GetHubSessionFactoryResetID()
 	msg.HubSessionTicket = pb.GetHubSessionTicket()
 	msg.HubSessionTicketExpiresTimeSec = pb.GetHubSessionTicketExpiresTimeSec()
+	msg.Where = pb.GetWhere()
+	msg.WhereWhen = pb.GetWhereWhen()
 	msg.NotefileID = pb.GetNotefileID()
 	msg.NotefileIDs = pb.GetNotefileIDs()
 	msg.Since = pb.GetSince()
@@ -1242,6 +1256,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.SessionIDMismatch = pb.GetSessionIDMismatch()
 	msg.NotificationSession = pb.GetNotificationSession()
 	msg.ContinuousSession = pb.GetContinuousSession()
+	msg.SuppressResponse = pb.GetSuppressResponse()
 	msg.Voltage100 = pb.GetVoltage100()
 	msg.Temp100 = pb.GetTemp100()
 	msg.Voltage1000 = pb.GetVoltage1000()
@@ -1274,7 +1289,9 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	}
 
 	// Extract the binary
-	msg.nf = &nf{}
+	if msg.nf == nil {
+		msg.nf = &nf{}
+	}
 	bytesLen := int(pb.GetBytes1())
 	if bytesLen != 0 {
 		msg.nf.Notefile = &Notefile{}
@@ -1291,7 +1308,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	}
 	bytesLen = int(pb.GetBytes2())
 	if bytesLen != 0 {
-		msg.nf.Notefiles = &map[string]Notefile{}
+		msg.nf.Notefiles = &map[string]*Notefile{}
 		jdata, err2 := jsonDecompress(wire[wirebase : wirebase+bytesLen])
 		if err2 != nil {
 			err = err2
@@ -1327,7 +1344,6 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	// Done
 	wirelen = wirebase
 	return
-
 }
 
 // WireReadRequest reads a message from the specified reader
@@ -1344,11 +1360,11 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		var err2 error
 		versionLen := 1
 		version = make([]byte, versionLen)
-		conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
 		n, err2 = rdconn.Read(version)
 		if debugWireRead {
 			if err2 == nil {
-				debugf("\n\nrdVersion(%d) %d\n", len(version), n)
+				logDebug("\n\nrdVersion(%d) %d", len(version), n)
 			}
 		}
 		if err2, ok := err2.(net.Error); ok && err2.Timeout() {
@@ -1383,16 +1399,16 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 
 	// Read the header
 	header := make([]byte, headerLength)
-	conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+	_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
 	if debugWireRead {
-		debugf("rdHeader(%d)\n", len(header))
+		logDebug("rdHeader(%d)", len(header))
 	}
 	n, err = io.ReadFull(rdconn, header)
 	if debugWireRead {
 		if err == nil {
-			debugf("rdHeader(%d) %d\n", len(header), n)
+			logDebug("rdHeader(%d) %d", len(header), n)
 		} else {
-			debugf("rdHeader(%d) %d %s\n", len(header), n, err)
+			logWarn("rdHeader(%d) %d %s", len(header), n, err)
 		}
 	}
 	if err != nil {
@@ -1415,16 +1431,16 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 	var protobuf []byte
 	if protobufLength != 0 {
 		protobuf = make([]byte, protobufLength)
-		conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
 		if debugWireRead {
-			debugf("rdProtobuf(%d)\n", len(protobuf))
+			logDebug("rdProtobuf(%d)", len(protobuf))
 		}
 		n, err = io.ReadFull(rdconn, protobuf)
 		if debugWireRead {
 			if err == nil {
-				debugf("rdProtobuf(%d) %d\n", len(protobuf), n)
+				logDebug("rdProtobuf(%d) %d", len(protobuf), n)
 			} else {
-				debugf("rdProtobuf(%d) %d %s\n", len(protobuf), n, err)
+				logWarn("rdProtobuf(%d) %d %s", len(protobuf), n, err)
 			}
 		}
 		if err != nil {
@@ -1449,16 +1465,16 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 	var binary []byte
 	if binaryLength != 0 {
 		binary = make([]byte, binaryLength)
-		conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
 		if debugWireRead {
-			debugf("rdBinary(%d)\n", len(binary))
+			logDebug("rdBinary(%d)", len(binary))
 		}
 		n, err = io.ReadFull(rdconn, binary)
 		if debugWireRead {
 			if err == nil {
-				debugf("rdBinary(%d) %d\n", len(binary), n)
+				logDebug("rdBinary(%d) %d", len(binary), n)
 			} else {
-				debugf("rdBinary(%d) %d %s\n", len(binary), n, err)
+				logWarn("rdBinary(%d) %d %s", len(binary), n, err)
 			}
 		}
 		if err != nil {
@@ -1481,5 +1497,4 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		request = append(request, binary...)
 	}
 	return
-
 }

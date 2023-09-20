@@ -16,15 +16,16 @@ import (
 )
 
 // Address/ports of our server, used to spawn listers and to assign handlers to devices
-var serverAddress string
-var serverPortTCP string
-var serverPortTCPS string
-var serverPortHTTP string
-var serverHTTPReqTopic string
+var (
+	serverAddress      string
+	serverPortTCP      string
+	serverPortTCPS     string
+	serverPortHTTP     string
+	serverHTTPReqTopic string
+)
 
 // Main service entry point
 func main() {
-
 	// If not specified on the command line, get our server address and ports
 	if len(os.Args) < 2 {
 		rsp, err := http.Get("http://checkip.amazonaws.com")
@@ -71,7 +72,6 @@ func main() {
 	for {
 		time.Sleep(5 * time.Minute)
 	}
-
 }
 
 // Get the directory containing keys

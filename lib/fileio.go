@@ -63,23 +63,20 @@ func fileioDelete(ctx context.Context, path string) (err error) {
 
 // Create a file and write it
 func fileioCreate(ctx context.Context, path string) (err error) {
-
 	str := strings.Split(path, "/")
 	if len(str) > 1 {
 		folder := strings.Join(str[0:len(str)-1], "/")
-		os.MkdirAll(folder, 0777)
+		_ = os.MkdirAll(folder, 0o777)
 	}
 
 	return fileioWriteJSON(ctx, path, []byte("{}"))
-
 }
 
 // Write an existing JSON file
 func fileioWriteJSON(ctx context.Context, path string, data []byte) (err error) {
-
-	fd, err2 := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0666)
+	fd, err2 := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o666)
 	if err2 != nil {
-		debugf("fileioWrite: error creating %s: %s\n", path, err)
+		logError("fileioWrite: error creating %s: %s", path, err)
 		err = err2
 		return
 	}
@@ -87,7 +84,7 @@ func fileioWriteJSON(ctx context.Context, path string, data []byte) (err error) 
 	// Write it
 	_, err = fd.Write(data)
 	if err != nil {
-		debugf("fileioWrite: error writing %s: %s\n", path, err)
+		logError("fileioWrite: error writing %s: %s", path, err)
 		fd.Close()
 		return
 	}
@@ -95,7 +92,6 @@ func fileioWriteJSON(ctx context.Context, path string, data []byte) (err error) 
 	// Done
 	fd.Close()
 	return
-
 }
 
 // Read an existing file

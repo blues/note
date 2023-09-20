@@ -14,7 +14,6 @@ import (
 
 // NotehubDiscover is responsible for discovery of information about the services and apps
 func NotehubDiscover(deviceUID string, deviceSN string, productUID string, hostname string) (info notelib.DiscoverInfo, err error) {
-
 	// Return basic info about the server
 	info.HubEndpointID = note.DefaultHubEndpointID
 	info.HubTimeNs = time.Now().UnixNano()
@@ -41,5 +40,4 @@ func NotehubDiscover(deviceUID string, deviceSN string, productUID string, hostn
 
 	// Done
 	return
-
 }

@@ -21,7 +21,6 @@ import (
 
 // tcpsHandler kicks off TLS request server
 func tcpsHandler() {
-
 	// Tell Notelib that we are serving TLS so it will reject TCP-only connect attempts
 	notelib.RegisterTLSSupport()
 
@@ -87,7 +86,6 @@ func tcpsHandler() {
 		go sessionHandler(connSession, true)
 
 	}
-
 }
 
 // TLSListen creates a TLS listener accepting connections on the
@@ -170,7 +168,6 @@ func NewTLSListener(inner net.Listener, config *tls.Config) net.Listener {
 
 // Authenticate an incoming session from a device
 func tlsAuthenticate(connSession net.Conn, device DeviceState) (err error) {
-
 	// Get info about the session
 	tlsc := connSession.(*tls.Conn)
 	tlsst := tlsc.ConnectionState()
@@ -201,5 +198,4 @@ func tlsAuthenticate(connSession net.Conn, device DeviceState) (err error) {
 
 	// Success
 	return
-
 }

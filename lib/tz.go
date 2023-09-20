@@ -14,8 +14,10 @@ type TimeZoneNames struct {
 	ID   int
 }
 
-var tznuminit bool
-var tznums map[string]int
+var (
+	tznuminit bool
+	tznums    map[string]int
+)
 
 // Note that the entire purpose of this module is to convert these standardized zone names into numbers
 // and vice-versa.  This list is NOT sorted and doesn't need to be.  However, if you add a new one,

@@ -63,6 +63,9 @@ message NotehubPB {
     optional string DeviceOrderingCode = 53;
     optional uint32 UsageRcvdBytesSecondary = 54;
     optional uint32 UsageSentBytesSecondary = 55;
+    optional bool SuppressResponse = 56;
+    optional string Where = 57;
+    optional int64 WhereWhen = 58;
 
 }
 

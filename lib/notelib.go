@@ -8,6 +8,7 @@ package notelib
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/blues/note-go/note"
@@ -40,11 +41,13 @@ type noteboxBody struct {
 
 // OpenNotefile is the in-memory data structure for an open notefile
 type OpenNotefile struct {
+	// Locks access to just this data structure
+	lock sync.RWMutex
 	// This notefile's containing box
 	box *Notebox
 	// Number of current users of the notefile who are
 	// counting on the notefile address to be stable
-	openCount int
+	openCount int32
 	// The time of last close where refcnt wne to 0
 	closeTime time.Time
 	// Modification count at point of last checkpoint
@@ -59,8 +62,10 @@ type OpenNotefile struct {
 
 // NoteboxInstance is the in-memory data structure for an open notebox
 type NoteboxInstance struct {
-	// Map of the Notefiles, indexed by storage object
-	openfiles map[string]OpenNotefile
+	// Map of POINTERS to OpenNotefiles, indexed by storage object.
+	// These must be pointers so that we can look it up and bump refcnt
+	// atomically without a lock.
+	openfiles sync.Map
 	// This notebox's storage object
 	storage string
 	// The endpoint ID that is to be used for all operations on the notebox

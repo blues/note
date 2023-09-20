@@ -12,7 +12,6 @@ import (
 
 // tcpHandler kicks off TCP request server
 func tcpHandler() {
-
 	fmt.Printf("Serving requests on tcp:%s%s\n", serverAddress, serverPortTCP)
 
 	serverAddr, err := net.ResolveTCPAddr("tcp", serverPortTCP)
@@ -42,5 +41,4 @@ func tcpHandler() {
 		go sessionHandler(connSession, false)
 
 	}
-
 }

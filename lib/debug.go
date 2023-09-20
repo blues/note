@@ -14,34 +14,31 @@ import (
 )
 
 // Debugging details
-var synchronous = true
-var debugEvent = true
-var debugBox = false
-var debugSync = false
-var debugSyncMax = false
-var debugCompress = false
-var debugHubRequest = true
-var debugRequest = true
-var debugFile = false
-var text = [...]string{
-	"event", "box", "sync", "syncmax", "compress", "hubrequest", "request", "file",
-}
+var (
+	synchronous     = true
+	debugEvent      = true
+	debugBox        = false
+	debugSync       = false
+	debugSyncMax    = false
+	debugCompress   = false
+	debugHubRequest = true
+	debugRequest    = true
+	debugFile       = false
+	text            = [...]string{
+		"event", "box", "sync", "syncmax", "compress", "hubrequest", "request", "file",
+	}
+)
+
 var vars = [...]*bool{
 	&debugEvent, &debugBox, &debugSync, &debugSyncMax, &debugCompress, &debugHubRequest, &debugRequest, &debugFile,
 }
 
-// Buffering
-var debugInitialized bool
-var debugChannel chan string
+var debugEnvInitialized = false
 
-// Initialize for debugging
-func debugInit() {
-
-	// The first time through, start our handler
-	if debugInitialized {
+func debugEnvInit() {
+	if debugEnvInitialized {
 		return
 	}
-
 	// Initialzie from environment variables
 	for i := range text {
 		avail, value := debugEnv(text[i])
@@ -49,18 +46,11 @@ func debugInit() {
 			*(vars[i]) = value
 		}
 	}
-
-	debugChannel = make(chan string, 500)
-
-	debugInitialized = true
-
-	go debugHandler()
-
+	debugEnvInitialized = true
 }
 
 // DebugSet sets the debug variable
 func DebugSet(which string, value string) {
-
 	// Convert the value as appropriate
 	boolValue := false
 	lcValue := strings.ToLower(value)
@@ -81,14 +71,13 @@ func DebugSet(which string, value string) {
 	for i := range text {
 		if text[i] == which {
 			*(vars[i]) = boolValue
-			debugf("%s is now %t\n", which, boolValue)
+			logInfo("%s is now %t", which, boolValue)
 			return
 		}
 	}
 
 	// Failure
-	debugf("%s not found\n", which)
-
+	logError("notelib debug setting %s not found", which)
 }
 
 // Get the value of a boolean environment variable
@@ -105,43 +94,110 @@ func debugEnv(which string) (isAvail bool, value bool) {
 	if i == 0 {
 		return true, false
 	}
-	debugf("%s is ENABLED\n", envvar)
+	logInfo("%s is ENABLED", envvar)
 	return true, true
 }
 
-// Output with printf-style args
-func debugf(format string, args ...interface{}) {
-	debug(fmt.Sprintf(format, args...))
+// Log functions with printf-style args
+var debugLoggerFunc func(string)
+
+func logDebug(format string, args ...interface{}) {
+	message := fmt.Sprintf(format, args...)
+	if debugLoggerFunc != nil {
+		debugLoggerFunc(message)
+	} else {
+		defaultLogger(message)
+	}
 }
+
+var infoLoggerFunc func(string)
+
+func logInfo(format string, args ...interface{}) {
+	message := fmt.Sprintf(format, args...)
+	if infoLoggerFunc != nil {
+		infoLoggerFunc(message)
+	} else {
+		defaultLogger(message)
+	}
+}
+
+var warnLoggerFunc func(string)
+
+func logWarn(format string, args ...interface{}) {
+	message := fmt.Sprintf(format, args...)
+	if warnLoggerFunc != nil {
+		warnLoggerFunc(message)
+	} else {
+		defaultLogger(message)
+	}
+}
+
+var errorLoggerFunc func(string)
+
+func logError(format string, args ...interface{}) {
+	message := fmt.Sprintf(format, args...)
+	if errorLoggerFunc != nil {
+		errorLoggerFunc(message)
+	} else {
+		defaultLogger(message)
+	}
+}
+func InitLogging(debugFunc func(string), infoFunc func(string), warnFunc func(string), errorFunc func(string)) {
+	debugEnvInit()
+	debugLoggerFunc = debugFunc
+	infoLoggerFunc = infoFunc
+	warnLoggerFunc = warnFunc
+	errorLoggerFunc = errorFunc
+}
+
+// Default logger for notelib
+var (
+	loggerInitialized bool
+	loggerChannel     chan string
+)
 
 // Output a debug string to local buffering, in a synchronized manner, and enqueue it for background
 // output on the console.  We do this because many of our debug routines are done at interrupt level,
 // and fmt.Printf is notoriously slow.
-func debug(message string) {
-
+func defaultLogger(message string) {
 	// Exit if not yet initialized
-	if !debugInitialized {
-		debugInit()
+	if !loggerInitialized {
+		defaultLoggerInit()
 	}
 
 	// Append to what's pending, unless the channel is full, in which case we drop it and move on
 	if synchronous {
-		fmt.Printf("%s", message)
+		fmt.Println(message)
 	} else {
 		select {
-		case debugChannel <- message:
+		case loggerChannel <- message:
 		default:
 			// channel full
 		}
 	}
+}
 
+// Initialize for debugging
+func defaultLoggerInit() {
+	// The first time through, start our handler
+	if loggerInitialized {
+		return
+	}
+
+	debugEnvInit()
+
+	loggerChannel = make(chan string, 500)
+
+	loggerInitialized = true
+
+	go loggerHandler()
 }
 
 // Background handler
-func debugHandler() {
+func loggerHandler() {
 	for {
-		output := <-debugChannel
-		fmt.Printf("%s", output)
+		output := <-loggerChannel
+		fmt.Println(output)
 		runtime.Gosched()
 	}
 }

@@ -16,8 +16,10 @@ import (
 const cleanWithJSONExtension = false
 
 // Default filename
-const defaultFileStorageName = "notefiles"
-const defaultFileStorageExt = ".db"
+const (
+	defaultFileStorageName = "notefiles"
+	defaultFileStorageExt  = ".db"
+)
 
 // Root storage location
 var fsRootStorageLocation = "."
@@ -60,13 +62,11 @@ func FileSetHandler(newfio *Fileio) {
 
 // FileStorageObject gives a deterministic storage object name from two components
 func FileStorageObject(containerName string) string {
-
 	// Generate a filename using the default storage file name
 	name := fsFilename(containerName, defaultFileStorageName)
 
 	// Return it as a storage object name
 	return fileStorage().class + ":" + name
-
 }
 
 // FileDefaultStorageObject gives a deterministic storage object name from two components
@@ -107,7 +107,6 @@ func fsCleanName(name string) string {
 
 // fsNamesFromStorageObject extracts the names from the storage object
 func fsNamesFromFileStorageObject(storageObject string) (containerName string, fileName string) {
-
 	// Remove the scheme
 	name := fsRemoveScheme(storageObject)
 
@@ -121,7 +120,6 @@ func fsNamesFromFileStorageObject(storageObject string) (containerName string, f
 
 	// Return the container and filename, associating all subdir components with the container
 	return strings.Join(str[0:len(str)-1], "/"), str[len(str)-1]
-
 }
 
 // FileCleanName generates a clean filename with correct extension from a filename input
@@ -137,7 +135,6 @@ func FileCleanName(filename string) string {
 
 // Generate a filename given some hints that are used to 'weigh in' on the aesthetics
 func fsFilename(storageHint string, filenameHint string) string {
-
 	// If no filename is specified, default it
 	if filenameHint == "" {
 		filenameHint = defaultFileStorageName
@@ -158,12 +155,10 @@ func fsFilename(storageHint string, filenameHint string) string {
 
 	// Return just the clean filename
 	return cleanFilename
-
 }
 
 // Combine two components into a filename
 func fsConstruct(storage string, filename string) string {
-
 	// If storage is specified (such as a Notebox), get the folder hint from storage
 	if storage != "" {
 		return storage + "/" + filename
@@ -171,7 +166,6 @@ func fsConstruct(storage string, filename string) string {
 
 	// Return just the filename
 	return filename
-
 }
 
 // Get the directory that's at the root of all notebox storage
@@ -187,14 +181,12 @@ func fsPath(filename string) string {
 // Create a file system object within the folder suggested by storageHint, but without that folder
 // specified in the storageObject path returned.
 func fsCreate(ctx context.Context, storageHint string, filenameHint string) (storageObject string, err error) {
-
 	// Find a path that doesn't yet exist
 	container, _ := fsNamesFromFileStorageObject(storageHint)
 	name := fsFilename(container, filenameHint)
 
 	// If and only if we're cleaning, select a path that doesn't exist - else overwrite the file
 	if cleanWithJSONExtension {
-
 		for i := 1; ; i++ {
 
 			exists, err2 := fio.Exists(ctx, fsPath(name))
@@ -209,7 +201,6 @@ func fsCreate(ctx context.Context, storageHint string, filenameHint string) (sto
 			name = fsFilename(container, fmt.Sprintf("%s%d", filenameHint, i))
 
 		}
-
 	}
 
 	// Create it, thus reserving its name.  Note that if it exists we must overwrite it (as the
@@ -220,7 +211,7 @@ func fsCreate(ctx context.Context, storageHint string, filenameHint string) (sto
 	path := fsPath(name)
 	err = fio.Create(ctx, path)
 	if err != nil {
-		fio.Delete(ctx, path)
+		_ = fio.Delete(ctx, path)
 		err = fio.Create(ctx, path)
 		if err != nil {
 			return
@@ -232,7 +223,6 @@ func fsCreate(ctx context.Context, storageHint string, filenameHint string) (sto
 
 	// Create an object name from this name WITHOUT the container
 	return fileStorage().class + ":" + name, nil
-
 }
 
 // Create a file system object given an explicit storage object name, assuming that this already has the
@@ -247,7 +237,7 @@ func fsCreateObject(ctx context.Context, storageObject string) (err error) {
 	path := fsPath(name)
 	err = fio.Create(ctx, path)
 	if err != nil {
-		fio.Delete(ctx, path)
+		_ = fio.Delete(ctx, path)
 		err = fio.Create(ctx, path)
 		if err != nil {
 			return
@@ -256,12 +246,10 @@ func fsCreateObject(ctx context.Context, storageObject string) (err error) {
 
 	// Done
 	return nil
-
 }
 
 // Convert two storage objects to a file path
 func fsObjectsToPath(iContainer string, iObject string) string {
-
 	// Remove schemes
 	container := fsRemoveScheme(iContainer)
 	object := fsRemoveScheme(iObject)
@@ -280,7 +268,6 @@ func fsObjectsToPath(iContainer string, iObject string) string {
 
 	// Done
 	return path
-
 }
 
 // Delete a file system object
@@ -290,11 +277,10 @@ func fsDelete(ctx context.Context, container string, object string) (err error) 
 
 // Writes a notefile to the specified file
 func fsWriteNotefile(ctx context.Context, file *Notefile, container string, object string) (err error) {
-
 	// Convert to JSON
 	jsonNotefile, err := file.uConvertToJSON(true)
 	if err != nil {
-		debugf("file: error converting %d-note notefile %s to json: %s\n", len(file.Notes), object, err)
+		logWarn("file: error converting %d-note notefile %s to json: %s", len(file.Notes), object, err)
 		return err
 	}
 
@@ -307,17 +293,15 @@ func fsWriteNotefile(ctx context.Context, file *Notefile, container string, obje
 
 	// Debug
 	if debugFile {
-		debugf("file: wrote %s %db containing %d notes\n", object, len(jsonNotefile), len(file.Notes))
+		logDebug("file: wrote %s %db containing %d notes", object, len(jsonNotefile), len(file.Notes))
 	}
 
 	// Done
 	return nil
-
 }
 
 // Reads a notefile from the specified file
 func fsReadNotefile(ctx context.Context, container string, object string) (notefile *Notefile, err error) {
-
 	// Read the file
 	path := fsObjectsToPath(container, object)
 	contents, err := fio.ReadJSON(ctx, path)
@@ -328,16 +312,15 @@ func fsReadNotefile(ctx context.Context, container string, object string) (notef
 	// Unmarshal the contents
 	file, err := jsonConvertJSONToNotefile(contents)
 	if err != nil {
-		debugf("file: error converting notefile %s to json: %s\n", object, err)
+		logWarn("file: error converting notefile %s to json: %s", object, err)
 		return &Notefile{}, err
 	}
 
 	// Debug
 	if debugFile {
-		debugf("file: read %s %db containing %d notes\n", object, len(contents), len(file.Notes))
+		logDebug("file: read %s %db containing %d notes", object, len(contents), len(file.Notes))
 	}
 
 	// Done
-	return &file, nil
-
+	return file, nil
 }

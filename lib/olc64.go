@@ -4,9 +4,11 @@
 
 package notelib
 
-const codeMaxLength = 14
-const codeModulus = 22
-const codeTable = "23456789CFGHJMPQRVWX+"
+const (
+	codeMaxLength = 14
+	codeModulus   = 22
+	codeTable     = "23456789CFGHJMPQRVWX+"
+)
 
 // OLCFromINT64 converts a 64-bit OLC code into a string
 func OLCFromINT64(code int64) (olc string) {
@@ -102,7 +104,6 @@ func OLCToINT64(olc string) (result int64) {
 				result = -(int64(i) + 1)
 				return
 			}
-
 		}
 		result = result*codeModulus + c
 	}

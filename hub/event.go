@@ -23,19 +23,18 @@ var eventLogDirectory string
 // Initialize the event log
 func eventLogInit(dir string) {
 	eventLogDirectory = dir
-	os.MkdirAll(eventLogDirectory, 0777)
+	os.MkdirAll(eventLogDirectory, 0o777)
 }
 
 // Event handling procedure
 func notehubEvent(ctx context.Context, context interface{}, local bool, file *notelib.Notefile, event *note.Event) (err error) {
-
 	// Retrieve the session context
 	session := context.(*notelib.HubSessionContext)
 
 	// If this is a queue and this is a template note, recursively expand it to multiple notifications
 	if event.Bulk {
 		session := context.(*notelib.HubSessionContext)
-		eventBulk(session, local, *file, *event)
+		eventBulk(session, local, file, *event)
 		return
 	}
 
@@ -60,7 +59,7 @@ func notehubEvent(ctx context.Context, context interface{}, local bool, file *no
 	filename = filename + ".json"
 
 	// Append the JSON to the file
-	f, err := os.OpenFile(eventLogDirectory+"/"+filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(eventLogDirectory+"/"+filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err == nil {
 		f.WriteString(eventNDJSON)
 		f.Close()
@@ -69,12 +68,10 @@ func notehubEvent(ctx context.Context, context interface{}, local bool, file *no
 	// Done
 	fmt.Printf("event: appended to %s\n", filename)
 	return
-
 }
 
 // For bulk data, process the template and payload, generating recursive notifications
-func eventBulk(session *notelib.HubSessionContext, local bool, file notelib.Notefile, event note.Event) (err error) {
-
+func eventBulk(session *notelib.HubSessionContext, local bool, file *notelib.Notefile, event note.Event) (err error) {
 	// Get the template from the note
 	bodyJSON, err := note.JSONMarshal(event.Body)
 	if err != nil {
@@ -91,7 +88,7 @@ func eventBulk(session *notelib.HubSessionContext, local bool, file notelib.Note
 	for {
 
 		// Get the next entry (ignoring OLC until we are ready to support it)
-		body, payload, when, where, wherewhen, _, success := bdc.BulkDecodeNextEntry()
+		body, payload, when, where, wherewhen, _, _, success := bdc.BulkDecodeNextEntry()
 		if !success {
 			break
 		}
@@ -113,7 +110,7 @@ func eventBulk(session *notelib.HubSessionContext, local bool, file notelib.Note
 		nn.Body = &body
 		nn.Payload = payload
 		nn.EventUID = uuid.New().String()
-		notehubEvent(context.Background(), session, local, &file, &nn)
+		notehubEvent(context.Background(), session, local, file, &nn)
 
 	}
 
