@@ -22,7 +22,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 
 	// Debug
 	if debugRequest {
-		debugf(">> %s\n", string(reqJSON))
+		logDebug(">> %s", string(reqJSON))
 	}
 
 	// Unmarshal the incoming request
@@ -31,7 +31,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		rsp.Err = fmt.Sprintf("unknown request: %s", err)
 		rspJSON, _ = note.JSONMarshal(rsp)
 		if debugRequest {
-			debugf("<< %s\n", string(rspJSON))
+			logDebug("<< %s", string(rspJSON))
 		}
 		return
 	}
@@ -138,6 +138,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		}
 		// Add the note
 		xnote := note.Note{}
+		annoteNoteWithWhereWhen(&xnote, req)
 		if req.Payload != nil {
 			xnote.Payload = *req.Payload
 		}
@@ -191,6 +192,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		var xnote note.Note
 		xnote, err = box.GetNote(ctx, req.NotefileID, req.NoteID)
 		if err != nil {
+			annoteNoteWithWhereWhen(&xnote, req)
 			if req.Payload != nil {
 				xnote.Payload = *req.Payload
 			}
@@ -204,6 +206,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			}
 			break
 		}
+		annoteNoteWithWhereWhen(&xnote, req)
 		if req.Payload != nil {
 			xnote.Payload = *req.Payload
 		} else {
@@ -316,7 +319,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			}
 		}
 		if req.Delete {
-			box.DeleteNote(ctx, endpointID, req.NotefileID, req.NoteID)
+			_ = box.DeleteNote(ctx, endpointID, req.NotefileID, req.NoteID)
 		}
 
 	case notecard.ReqFileGetL:
@@ -351,12 +354,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			// Use the special reserved name, which (for internal use only) means "no tracker"
 			showOnlyTotal = true
 			tracker = ReservedIDDelimiter
-			notefiles, err = box.Notefiles(false)
-			if err != nil {
-				rsp.Err = fmt.Sprintf("cannot get list of all notefiles: %s", err)
-				break
-			}
-
+			notefiles = box.Notefiles(false)
 		} else {
 
 			// Handle special case of "^" meaning things to be downloaded
@@ -371,12 +369,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			}
 
 			// Get the changed notefiles for that tracker
-			notefiles, err = box.GetChangedNotefiles(ctx, req.TrackerID)
-			if err != nil {
-				rsp.Err = fmt.Sprintf("cannot get list of changed notefiles: %s", err)
-				break
-			}
-
+			notefiles = box.GetChangedNotefiles(ctx, req.TrackerID)
 		}
 
 		// Prune the list of notefiles based on whether or not the user's perception is
@@ -501,6 +494,12 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			req.TrackerID = ReservedIDDelimiter
 		}
 
+		// If we're debugging and we want to see the changes for the specified tracker
+		// BUT we don't want to update the tracker just yet.
+		if req.Pending {
+			updateTracker = false
+		}
+
 		// Make sure that it's a valid tracker in that it's not one of our known endpoints
 		if req.TrackerID == note.DefaultDeviceEndpointID || req.TrackerID == note.DefaultHubEndpointID {
 			rsp.Err = fmt.Sprintf("cannot use this reserved tracker name: %s", req.TrackerID)
@@ -527,7 +526,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		chgfile, _, totalChanges, totalNotes, since, until, err := file.GetChanges(req.TrackerID, req.Deleted, int(req.Max))
 		if err != nil {
 			if req.Stop && updateTracker {
-				file.DeleteTracker(req.TrackerID)
+				_ = file.DeleteTracker(req.TrackerID)
 			}
 			openfile.Close(ctx)
 			rsp.Err = fmt.Sprintf("cannot get list of changed notes: %s", err)
@@ -536,12 +535,12 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 
 		// Update the change tracker because we're confident that we'll return successfully
 		if updateTracker {
-			file.UpdateChangeTracker(req.TrackerID, since, until)
+			_ = file.UpdateChangeTracker(req.TrackerID, since, until)
 		}
 
 		// If the flag was set, delete the tracker because it is no longer needed
 		if req.Stop && updateTracker {
-			file.DeleteTracker(req.TrackerID)
+			_ = file.DeleteTracker(req.TrackerID)
 		}
 
 		// We'll need to know if it's a queue
@@ -577,7 +576,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 
 			// Delete it as a side-effect, if desired
 			if req.Delete {
-				file.DeleteNote(endpointID, noteIDs[i])
+				_ = file.DeleteNote(endpointID, noteIDs[i])
 			}
 
 		}
@@ -602,12 +601,27 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 
 	// Debug
 	if debugRequest {
-		debugf("<< %s\n", string(rspJSON))
+		logDebug("<< %s", string(rspJSON))
 	}
 
 	// Done
 	return
+}
 
+// Annotate a note structure with optional location and tower info from a request
+func annoteNoteWithWhereWhen(xnote *note.Note, req notecard.Request) {
+	if req.Time != 0 || req.Latitude != 0 || req.Longitude != 0 {
+		newHistory := note.History{}
+		newHistory.When = req.Time
+		newHistory.Where = req.LocationOLC
+		newHistory.WhereWhen = req.LocationTime
+		newHistories := []note.History{}
+		newHistories = append(newHistories, newHistory)
+		xnote.Histories = &newHistories
+	}
+	if req.Tower != nil {
+		xnote.Tower = req.Tower
+	}
 }
 
 // ErrorResponse creates a simple JSON response given an error

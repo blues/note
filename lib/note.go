@@ -16,7 +16,6 @@ import (
 
 // updateNote performs the bulk of Note Update, Delete, Merge operations
 func updateNote(xnote *note.Note, endpointID string, resolveConflicts bool, deleted bool) {
-
 	updates := xnote.Updates + 1
 	sequence := updates
 
@@ -135,7 +134,6 @@ func updateNote(xnote *note.Note, endpointID string, resolveConflicts bool, dele
 		xnote.Body = nil
 		xnote.Payload = nil
 	}
-
 }
 
 // compareModified compares two Notes, and returns
@@ -146,7 +144,6 @@ func updateNote(xnote *note.Note, endpointID string, resolveConflicts bool, dele
 //	conflictDataDiffers is returned as true if they
 //	   are equal but their conflict data is different
 func compareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffers bool, result int) {
-
 	if incomingNote.Updates > xnote.Updates {
 		return false, -1
 	}
@@ -187,7 +184,6 @@ func compareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffe
 	if len(noteConflicts) == len(incomingNoteConflicts) {
 
 		if len(noteConflicts) > 0 {
-
 			for index := 0; index < len(noteConflicts); index++ {
 				localConflictNote := noteConflicts[index]
 				matchingConflict := false
@@ -212,12 +208,10 @@ func compareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffe
 	}
 
 	return true, 0
-
 }
 
 // isSubsumedBy determines whether or not this Note was subsumed by changes to another
 func isSubsumedBy(xnote note.Note, incomingNote note.Note) bool {
-
 	noteHistories := copyOrCreateNonblankHistory(xnote.Histories)
 	incomingNoteHistories := copyOrCreateNonblankHistory(incomingNote.Histories)
 	noteConflicts := copyOrCreateBlankConflict(xnote.Conflicts)
@@ -255,7 +249,7 @@ func isSubsumedBy(xnote note.Note, incomingNote note.Note) bool {
 
 		localConflict := noteConflicts[index]
 		if isSubsumedBy(localConflict, incomingNote) {
-			isSubsumed = true
+			isSubsumed = true //nolint This is an ineffectual assignment, but it is here for clarity
 			break
 		}
 
@@ -303,7 +297,6 @@ func copyOrCreateNonblankHistory(historiesToCopy *[]note.History) []note.History
 
 // newHistory creates a history entry for a Note being modified
 func newHistory(endpointID string, when int64, where string, wherewhen int64, sequence int32) note.History {
-
 	newHistory := note.History{}
 	newHistory.EndpointID = endpointID
 
@@ -329,16 +322,13 @@ func newHistory(endpointID string, when int64, where string, wherewhen int64, se
 
 // Determine whether or not a Note's history was subsumed by changes to another
 func isHistorySubsumedBy(thisHistory note.History, incomingHistory note.History) bool {
-
 	Subsumed := (thisHistory.EndpointID == incomingHistory.EndpointID) && (incomingHistory.Sequence >= thisHistory.Sequence)
 
 	return Subsumed
-
 }
 
 // Merge the contents of two Notes
 func Merge(localNote *note.Note, incomingNote *note.Note) note.Note {
-
 	//  Create flattened array for local note & conflicts
 	clonedLocalNote := copyNote(localNote)
 	localNotes := copyOrCreateBlankConflict(clonedLocalNote.Conflicts)
@@ -377,7 +367,6 @@ func Merge(localNote *note.Note, incomingNote *note.Note) note.Note {
 
 // The bulk of processing for merging two sets of Notes into a single result set
 func mergeNotes(outerNotes *[]note.Note, innerNotes *[]note.Note, mergeNotes *[]note.Note, winnerNote *note.Note) *note.Note {
-
 	for outerNotesIndex := 0; outerNotesIndex < len(*outerNotes); outerNotesIndex++ {
 		outerNote := (*outerNotes)[outerNotesIndex]
 		outerNoteSubsumed := false
@@ -431,7 +420,6 @@ func mergeNotes(outerNotes *[]note.Note, innerNotes *[]note.Note, mergeNotes *[]
 
 // copyNote duplicates a Note
 func copyNote(xnote *note.Note) note.Note {
-
 	newNote := note.Note{}
 	newNote.Updates = xnote.Updates
 	newNote.Deleted = xnote.Deleted
@@ -456,7 +444,6 @@ func copyNote(xnote *note.Note) note.Note {
 var lastTimestamp int64
 
 func createNoteTimestamp(endpointID string) int64 {
-
 	// Return the later of the current time (in seconds) and the last one that we handed out
 	thisTimestamp := time.Now().UTC().UnixNano() / 1000000000
 	if thisTimestamp <= lastTimestamp {
@@ -467,7 +454,6 @@ func createNoteTimestamp(endpointID string) int64 {
 	}
 
 	return thisTimestamp
-
 }
 
 // compareNoteTimestamps is a standard Compare function

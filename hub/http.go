@@ -89,7 +89,6 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 
 	// Write the response
 	httpRsp.Write(rspJSON)
-
 }
 
 // httpArgs parses the request URI and returns interesting things
@@ -129,5 +128,4 @@ func httpArgs(req *http.Request, topic string) (target string, args map[string]s
 
 	// Done
 	return
-
 }

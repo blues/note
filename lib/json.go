@@ -14,13 +14,12 @@ import (
 )
 
 // jsonConvertJSONToNotefile deserializes/unmarshals a JSON buffer to an in-memory Notefile.
-func jsonConvertJSONToNotefile(jsonNotefile []byte) (Notefile, error) {
-
+func jsonConvertJSONToNotefile(jsonNotefile []byte) (*Notefile, error) {
 	// Unmarshal the JSON
-	newNotefile := Notefile{}
+	newNotefile := &Notefile{}
 	err := note.JSONUnmarshal(jsonNotefile, &newNotefile)
 	if err != nil {
-		return Notefile{}, err
+		return newNotefile, err
 	}
 
 	// If any of the core map data structures are empty, make sure they
@@ -33,36 +32,9 @@ func jsonConvertJSONToNotefile(jsonNotefile []byte) (Notefile, error) {
 	}
 
 	return newNotefile, nil
-
-}
-
-// ConvertToJSON serializes/marshals the in-memory Notefile into a JSON buffer
-func (file *Notefile) uConvertToJSON(indent bool) (output []byte, err error) {
-
-	// Do the marshal
-	if indent {
-		output, err = note.JSONMarshalIndent(file, "", "    ")
-	} else {
-		output, err = note.JSONMarshal(file)
-	}
-
-	return
-}
-
-// ConvertToJSON serializes/marshals the in-memory Notefile into a JSON buffer
-func (file *Notefile) ConvertToJSON(indent bool) (output []byte, err error) {
-
-	// Lock for reading
-	nfLock.RLock()
-
-	// Convert it
-	output, err = file.uConvertToJSON(indent)
-
-	// Unlock
-	nfLock.RUnlock()
-	return
 }
 
 // Body functions for Notebox body
-func noteboxBodyFromJSON(data []byte) (body noteboxBody) { note.JSONUnmarshal(data, &body); return }
+// Todo: Should these return errors?
+func noteboxBodyFromJSON(data []byte) (body noteboxBody) { _ = note.JSONUnmarshal(data, &body); return }
 func noteboxBodyToJSON(body noteboxBody) (data []byte)   { data, _ = note.JSONMarshal(body); return }

@@ -14,21 +14,35 @@ import (
 	"github.com/google/uuid"
 )
 
+// hubSessionContext is our notehub implementation's session context
+type hubSessionContext struct {
+	Hub notelib.HubSessionContext
+}
+
+// Session ID for logging purposes
+var sessionIdForLogging = 0
+
 // Process requests for the duration of a session being open
 func sessionHandler(connSession net.Conn, secure bool) {
-	ctx := context.Background()
 
 	// Keep track of this, from a resource consumption perspective
 	fmt.Printf("Opened session\n")
 
 	// Always start with a blank, inactive Session Context
-	sessionContext := notelib.HubSessionContext{}
-	sessionContext.Secure = secure
-	sessionContext.Session.SessionUID = uuid.New().String()
+	sessionIdForLogging++
+	sessionContext := hubSessionContext{}
+	sessionContext.Hub.Session.TLSSession = secure
+	sessionContext.Hub.Session.SessionUID = uuid.New().String()
+	sessionContext.Hub.IdForLogging = fmt.Sprintf("ID%06d", sessionIdForLogging)
+
+	// Set up golang context with session context stored within
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, notelib.HubSessionContextKey, &sessionContext.Hub)
+
 	for {
 		var request, response []byte
 		var err error
-		firstTransaction := sessionContext.Transactions == 0
+		firstTransaction := sessionContext.Hub.Transactions == 0
 
 		// Extract a request from the wire, and exit if error
 		_, request, err = notelib.WireReadRequest(connSession, true)
@@ -43,20 +57,20 @@ func sessionHandler(connSession net.Conn, secure bool) {
 		if firstTransaction {
 
 			// Extract session context info from the wire format even before processing the transaction
-			err = notelib.WireExtractSessionContext(request, &sessionContext)
+			_, err = notelib.WireExtractSessionContext(request, &sessionContext.Hub)
 			if err != nil {
 				fmt.Printf("session: error extracting session context from request: %s", err)
 				break
 			}
 
 			// Exit if no DeviceUID, at a minimum because this is needed for authentication
-			if sessionContext.DeviceUID == "" {
+			if sessionContext.Hub.Session.DeviceUID == "" {
 				fmt.Printf("session: device UID is missing from request\n")
 				break
 			}
 
 			// Make sure that this device is provisioned
-			device, err2 := deviceGetOrProvision(sessionContext.DeviceUID, sessionContext.DeviceSN, sessionContext.ProductUID)
+			device, err2 := deviceGetOrProvision(sessionContext.Hub.Session.DeviceUID, sessionContext.Hub.Session.DeviceSN, sessionContext.Hub.Session.ProductUID)
 			if err2 != nil {
 				fmt.Printf("session: can't get or provision device: %s\n", err2)
 				break
@@ -74,22 +88,24 @@ func sessionHandler(connSession net.Conn, secure bool) {
 		}
 
 		// Process the request
-		fmt.Printf("\nReceived %d-byte message from %s\n", len(request), sessionContext.DeviceUID)
+		fmt.Printf("\nReceived %d-byte message from %s\n", len(request), sessionContext.Hub.Session.DeviceUID)
 		var reqtype string
-		reqtype, response, err = notelib.HubRequest(ctx, &sessionContext, request, notehubEvent, &sessionContext)
+		var suppressResponse bool
+		reqtype, response, suppressResponse, err = notelib.HubRequest(ctx, request, notehubEvent, &sessionContext.Hub)
 		if err != nil {
 			fmt.Printf("session: error processing '%s' request: %s\n", reqtype, err)
 			break
 		}
 
 		// Write the response
-		connSession.Write(response)
-		sessionContext.Transactions++
+		if !suppressResponse {
+			connSession.Write(response)
+		}
+		sessionContext.Hub.Transactions++
 
 	}
 
 	// Close the connection
 	connSession.Close()
 	fmt.Printf("\nClosed session\n\n")
-
 }

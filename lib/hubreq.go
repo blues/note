@@ -22,25 +22,28 @@ import (
 // Flag indicating TLS support on this server
 var serverSupportsTLS bool
 
-// NoteboxInitFunc is the func to initialize the notebox at the start of a session
-type NoteboxInitFunc func(box *Notebox, deviceUID string, appUID string) (err error)
+// NoteboxUpdateEnvFunc is the func to update environment variables for a device
+type NoteboxUpdateEnvFunc func(ctx context.Context, box *Notebox, deviceUID string, appUID string, updateFeeds bool) (err error)
 
-var fnNoteboxUpdateEnv NoteboxInitFunc
+var fnNoteboxUpdateEnv NoteboxUpdateEnvFunc
 
-// HubSetNoteboxInit sets the global notebox function to update env vars
-func HubSetNoteboxInit(ctx context.Context, fn NoteboxInitFunc) {
+// HubSetUpdateEnvironment sets the global notebox function to update env vars
+func HubSetUpdateEnvironment(ctx context.Context, fn NoteboxUpdateEnvFunc) {
 	fnNoteboxUpdateEnv = fn
 }
 
 // Update the environment variables for an open notebox
-func hubUpdateEnvVars(box *Notebox, deviceUID string, appUID string) {
+func hubUpdateEnvVars(ctx context.Context, box *Notebox, deviceUID string, appUID string, updateFeeds bool) {
 	if fnNoteboxUpdateEnv != nil {
-		fnNoteboxUpdateEnv(box, deviceUID, appUID)
+		err := fnNoteboxUpdateEnv(ctx, box, deviceUID, appUID, updateFeeds)
+		if err != nil {
+			logDebug("env: can't update env vars: %s", err)
+		}
 	}
 }
 
 // GetNotificationFunc retrieves hub notifications to be sent to client
-type GetNotificationFunc func(ctx context.Context, deviceMonitorID int64) (notifications []string)
+type GetNotificationFunc func(ctx context.Context, deviceEndpointID string, deviceMonitorID int64) (notifications []string)
 
 var fnHubNotifications GetNotificationFunc
 
@@ -60,7 +63,7 @@ func HubSetReadFile(fn ReadFileFunc) {
 }
 
 // WebRequestFunc performs a web request on behalf of a device
-type WebRequestFunc func(ctx context.Context, deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqoffset uint, reqmaxbytes uint, target string, bodyJSON []byte, payload []byte, session *HubSessionContext) (rspstatuscode int, rspheader map[string][]string, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
+type WebRequestFunc func(ctx context.Context, deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqoffset int, reqmaxbytes int, target string, bodyJSON []byte, payload []byte) (rspstatuscode int, rspheader map[string][]string, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
 
 var fnHubWebRequest WebRequestFunc
 
@@ -93,11 +96,17 @@ func HubCheckpointRequest() (message []byte, err error) {
 // a single session.  The return arguments should be interpreted as follows:
 // - if err is returned, do not return a reply to the remote requestor
 // - if err is nil, always send result back to request
-func HubRequest(ctx context.Context, session *HubSessionContext, content []byte, event EventFunc, context interface{}) (reqtype string, result []byte, err error) {
-
+func HubRequest(ctx context.Context, content []byte, event EventFunc, context interface{}) (reqtype string, result []byte, suppress bool, err error) {
 	// Preset in case of error return
 	var rsp notehubMessage
 	rsp.Version = currentProtocolVersion
+
+	// Retrieve the session context
+	session, present := ctx.Value(HubSessionContextKey).(*HubSessionContext)
+	if !present {
+		err = fmt.Errorf("no hub session context")
+		return
+	}
 
 	// Convert from on-wire text to a message, and extract its type
 	req, wirelen, err2 := msgFromWire(content)
@@ -107,17 +116,16 @@ func HubRequest(ctx context.Context, session *HubSessionContext, content []byte,
 		return
 	}
 
+	suppress = req.SuppressResponse
 	reqtype = msgTypeName(req.MessageType)
-	var reqStart time.Time
+	reqStart := time.Now()
 
 	// Display the request being processed
 	if debugHubRequest {
-		reqStart = time.Now()
 		// Pass req through FilterForLog function to remove customer data before logging.
-		filteredMsg := req.FilterForLog()
+		filteredMsg := filterForLog(req)
 		filteredJSON, _ := note.JSONMarshal(filteredMsg)
-		debugf("%s %s Request #%d (%db wire) %s %s\n",
-			reqStart.Format(time.RFC3339), session.IdForLogging, session.Transactions, wirelen, reqtype, filteredJSON)
+		logInfo("%s Request #%d (%db wire) %s %s", session.IdForLogging, session.Transactions, wirelen, reqtype, filteredJSON)
 	}
 
 	// Authenticate the session
@@ -129,20 +137,16 @@ func HubRequest(ctx context.Context, session *HubSessionContext, content []byte,
 		if err2 != nil {
 			err = fmt.Errorf("discover error "+note.ErrAuth+": %s", err2)
 		} else {
-
 			if req.MessageType == msgDiscover {
-
-				if TLSSupport() && !session.Secure {
+				if TLSSupport() && !session.Session.TLSSession {
 					err = fmt.Errorf("secure session required " + note.ErrAuth)
-					debugf("%s: attempt to discover with unsecure session\n", req.DeviceUID)
+					logWarn("%s: attempt to discover with unsecure session", req.DeviceUID)
 				}
-
 			} else {
-
 				// If the ticket isn't an exact match, then it's not a valid connect attemp
 				if sessionTicket == "" || sessionTicket != req.HubSessionTicket {
 					err = fmt.Errorf("session not authorized " + note.ErrAuth + note.ErrTicket)
-					debugf("TICKET REJECTED for %s (server may have been restarted)\n    Assigned: %s\n   Requested: %s\n", req.DeviceUID, sessionTicket, req.HubSessionTicket)
+					logWarn("TICKET REJECTED for %s (server may have been restarted)\n    Assigned: %s\n   Requested: %s", req.DeviceUID, sessionTicket, req.HubSessionTicket)
 				}
 			}
 		}
@@ -154,11 +158,15 @@ func HubRequest(ctx context.Context, session *HubSessionContext, content []byte,
 		// Set or supply session context as appropriate.  The client will send the data on EITHER
 		// a formal "set session context" message, OR on the very first message (as an optimization)
 		if !session.Active {
-			WireExtractSessionContext(content, session)
+			_, err = WireExtractSessionContext(content, session)
+			if err != nil {
+				err = fmt.Errorf("couldn't extract session context: %w", err)
+				return
+			}
 		} else {
-			req.DeviceUID = session.DeviceUID
-			req.DeviceSN = session.DeviceSN
-			req.ProductUID = session.ProductUID
+			req.DeviceUID = session.Session.DeviceUID
+			req.DeviceSN = session.Session.DeviceSN
+			req.ProductUID = session.Session.ProductUID
 			req.DeviceEndpointID = session.DeviceEndpointID
 			req.HubEndpointID = session.HubEndpointID
 			req.HubSessionTicket = session.HubSessionTicket
@@ -212,7 +220,7 @@ func HubRequest(ctx context.Context, session *HubSessionContext, content []byte,
 			offsetSecondsEastOfUTC := 0
 			location, err := time.LoadLocation(lastKnownLocation.TimeZone)
 			if err != nil {
-				fmt.Printf("*** Can't load location for: %s\n", lastKnownLocation.TimeZone)
+				logWarn("*** Can't load location for: %s", lastKnownLocation.TimeZone)
 			} else {
 				localTime := time.Now().In(location)
 				shortZone, offsetSecondsEastOfUTC = localTime.Zone()
@@ -242,11 +250,14 @@ func HubRequest(ctx context.Context, session *HubSessionContext, content []byte,
 
 	// Display the result
 	if debugHubRequest {
-		// Pass rsp through FilterForLog function to remove customer data before logging.
-		filteredRsp := rsp.FilterForLog()
+		// Pass rsp through filterForLog function to remove customer data before logging.
+		filteredRsp := filterForLog(rsp)
 		filteredJSON, _ := note.JSONMarshal(filteredRsp)
-		debugf("%s %s Response #%d (%db wire) %s in %0.1fms %s\n",
-			time.Now().Format(time.RFC3339), session.IdForLogging, session.Transactions, wirelen, reqtype, float64(time.Since(reqStart))/float64(time.Millisecond), filteredJSON)
+		suppressedMsg := ""
+		if suppress {
+			suppressedMsg = " SUPPRESSED"
+		}
+		logInfo("%s Response #%d (%db wire%s) %s in %s %s", session.IdForLogging, session.Transactions, wirelen, suppressedMsg, reqtype, time.Since(reqStart), filteredJSON)
 	}
 
 	// Done
@@ -274,13 +285,11 @@ func HubErrorResponse(session *HubSessionContext, errorMessage string) (result [
 
 	// Display the result
 	if debugHubRequest {
-		JSON, _ := note.JSONMarshal(rsp)
-		debugf("Response (%db json, %db wire)\n%s\n", len(JSON), wirelen, JSON)
+		logInfo("%s Response #%d (%db wire) Error %s", session.IdForLogging, session.Transactions, wirelen, errorMessage)
 	}
 
 	// Done
 	return
-
 }
 
 // processRequest processes a request message
@@ -365,12 +374,10 @@ func processRequest(ctx context.Context, session *HubSessionContext, req notehub
 	}
 
 	return rsp
-
 }
 
 // Open the endpoint's notebox
 func openHubNoteboxForDevice(ctx context.Context, session *HubSessionContext, deviceUID string, deviceSN string, productUID string, endpointID string, event EventFunc, context interface{}) (box *Notebox, appUID string, err error) {
-
 	// Ensure that hub endpoint is available
 	var hubEndpointID, deviceStorageObject string
 	_, hubEndpointID, appUID, deviceStorageObject, err = HubDiscover(deviceUID, deviceSN, productUID)
@@ -392,19 +399,14 @@ func openHubNoteboxForDevice(ctx context.Context, session *HubSessionContext, de
 
 	// Done
 	return
-
 }
 
 // Ensure that the specified notefile is in the list
 func sawNotefile(session *HubSessionContext, box *Notebox, notefileID string) {
-
 	// First time through
 	if !session.NotefilesUpdated {
-		var err error
-		session.Notefiles, err = box.Notefiles(false)
-		if err == nil {
-			session.NotefilesUpdated = true
-		}
+		session.Notefiles = box.Notefiles(false)
+		session.NotefilesUpdated = true
 	}
 
 	// Exit if just loading the notefiles
@@ -423,7 +425,6 @@ func sawNotefile(session *HubSessionContext, box *Notebox, notefileID string) {
 	if !found {
 		session.Notefiles = append(session.Notefiles, notefileID)
 	}
-
 }
 
 // Perform Web Request, with message fields being used/overloaded as follows:
@@ -435,10 +436,10 @@ func sawNotefile(session *HubSessionContext, box *Notebox, notefileID string) {
 // SessionIDMismatch is set to true if the payload is compressed
 // HighPowerSecsTotal is totalPayloadLen
 // HighPowerSecsData is payloadOffset
+// HighPowerSecsGPS is an indication (a maximum size on device) to return the binary as a binary payload
 // SessionTrigger is MD5 (in both directions)
 // MaxChanges on the response is the HTTP status code
 func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
-
 	if fnHubWebRequest == nil {
 		return fmt.Errorf("no web request handler has been set " + note.ErrHubNoHandler)
 	}
@@ -453,7 +454,7 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 		return fmt.Errorf("web request requires a method")
 	}
 	reqcontent := req.MotionOrientation
-	reqmaxbytes := uint(req.MotionSecs)
+	reqmaxbytes := int(req.MotionSecs)
 	target := req.NotefileIDs
 	totalPayloadLen := int(req.HighPowerSecsTotal)
 	payloadOffset := int(req.HighPowerSecsData)
@@ -470,10 +471,16 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 	}
 	notefile.Close()
 
-	// If there is no payload, use "offset" for byte range operations (along with "max" for length)
-	reqoffset := uint(0)
+	// If the payload isn't in the note, try the binary payload area in the wire protocol,
+	// as this is where "large IO" objects are optionally uploaded
 	if len(snote.Payload) == 0 {
-		reqoffset = uint(payloadOffset)
+		snote.Payload = req.GetPayload()
+	}
+
+	// If there is no payload, use "offset" for byte range operations (along with "max" for length)
+	reqoffset := int(0)
+	if len(snote.Payload) == 0 {
+		reqoffset = int(payloadOffset)
 		payloadOffset = 0
 	}
 
@@ -493,12 +500,10 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 		}
 	}
 
-	// If a segmented payload upload has been requested (as indicated by
+	// If a segmented payload upload has been requested (as indicated by HighPowerSecsTotal in wire protocol)
 	if totalPayloadLen == 0 {
-
 		// If not requesting a segmented upload, clear any pending retained payload
 		session.PendingWebPayload = []byte{}
-
 	} else if len(snote.Payload) > 0 {
 
 		// It would be absurd for a developer to be sending this much data, but in the
@@ -529,8 +534,16 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 			rsp.MaxChanges = http.StatusContinue
 			notefile = CreateNotefile(false)
 			snote, _ = note.CreateNote(nil, nil)
-			notefile.AddNote(req.DeviceEndpointID, specialNoteID, snote)
-			rsp.SetNotefile(notefile)
+			_, err = notefile.AddNote(req.DeviceEndpointID, specialNoteID, snote)
+			if err != nil {
+				err = fmt.Errorf("addNote error when pending payload: %w", err)
+				return
+			}
+			err = rsp.SetNotefile(notefile)
+			if err != nil {
+				err = fmt.Errorf("setNotefile error when pending payload: %w", err)
+				return
+			}
 			return
 		}
 
@@ -547,9 +560,20 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 
 	}
 
+	// Process web requests asynchronously if desired
+	if req.SuppressResponse {
+		go func() {
+			_, _, _, _, err := fnHubWebRequest(ctx, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, snote.GetBody(), snote.Payload)
+			if err != nil {
+				logInfo("error during async web request: %s", err)
+			}
+		}()
+		return nil
+	}
+
 	// Perform the web request.  If an error occurs, place the result in rsp.Error but
 	// continue processing the transaction.
-	statuscode, rspHeader, rspBodyJSON, rspPayload, err := fnHubWebRequest(ctx, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, snote.GetBody(), snote.Payload, session)
+	statuscode, rspHeader, rspBodyJSON, rspPayload, err := fnHubWebRequest(ctx, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, snote.GetBody(), snote.Payload)
 	if err != nil {
 		rsp.Error = fmt.Sprintf("%s", err)
 	}
@@ -557,13 +581,6 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 	// If there's a payload, return its MD5 to the caller so the device can check for corruption
 	if len(rspPayload) > 0 {
 		rsp.SessionTrigger = fmt.Sprintf("%x", md5.Sum(rspPayload))
-	}
-
-	// Place the web response back into the special notefile
-	notefile = CreateNotefile(false)
-	snote, err = note.CreateNote(rspBodyJSON, rspPayload)
-	if err != nil {
-		return err
 	}
 
 	// For byte range requests, return the total bytes in the file.  The
@@ -576,15 +593,33 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 			totalBytes, _ = strconv.Atoi(firstContentRangeComponents[1])
 		}
 	}
-
-	// Add the note to the notefile
-	err = notefile.AddNote(req.DeviceEndpointID, specialNoteID, snote)
-	if err != nil {
-		return err
-	}
 	rsp.MaxChanges = int32(statuscode)
 	rsp.HighPowerSecsTotal = uint32(totalBytes)
 
+	// Place the web response back into the special notefile.  If the device specifies that it would
+	// prefer to receive it as binary in the payload buffer, move it there.
+	notefile = CreateNotefile(false)
+	if req.HighPowerSecsGPS == 0 {
+		// Create the note with both the body and payload
+		snote, err = note.CreateNote(rspBodyJSON, rspPayload)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Add the payload to the response message
+		rsp.SetPayload(rspPayload)
+		// Create the note with only the body
+		snote, err = note.CreateNote(rspBodyJSON, nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Add the note to the notefile and add it to the response message
+	_, err = notefile.AddNote(req.DeviceEndpointID, specialNoteID, snote)
+	if err != nil {
+		return err
+	}
 	err = rsp.SetNotefile(notefile)
 	if err != nil {
 		return err
@@ -592,12 +627,10 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 
 	// Done
 	return
-
 }
 
 // Perform Signal
 func hubSignal(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
-
 	if fnHubSignal == nil {
 		return fmt.Errorf("no signal request handler has been set " + note.ErrHubNoHandler)
 	}
@@ -619,12 +652,10 @@ func hubSignal(ctx context.Context, session *HubSessionContext, req notehubMessa
 
 	// Done
 	return
-
 }
 
 // Get Notification message
 func hubGetNotification(ctx context.Context, session *HubSessionContext, msg notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
-
 	// These conditions should never happen
 	if fnHubNotifications == nil {
 		return fmt.Errorf("no notification handler has been set " + note.ErrHubNoHandler)
@@ -637,7 +668,7 @@ func hubGetNotification(ctx context.Context, session *HubSessionContext, msg not
 	}
 
 	// Get the changes pending
-	changes := fnHubNotifications(ctx, session.DeviceMonitorID)
+	changes := fnHubNotifications(ctx, msg.DeviceEndpointID, session.DeviceMonitorID)
 
 	// Turn the changes into a payload
 	payload := []byte(strings.Join(changes, "\n"))
@@ -648,7 +679,7 @@ func hubGetNotification(ctx context.Context, session *HubSessionContext, msg not
 		snote, err = note.CreateNote(nil, payload)
 		if err == nil {
 			notefile := CreateNotefile(false)
-			err = notefile.AddNote(msg.DeviceEndpointID, "signal", snote)
+			_, err = notefile.AddNote(msg.DeviceEndpointID, "signal", snote)
 			if err == nil {
 				err = rsp.SetNotefile(notefile)
 			}
@@ -661,7 +692,6 @@ func hubGetNotification(ctx context.Context, session *HubSessionContext, msg not
 
 // Discover request processing
 func hubDiscovery(ctx context.Context, session *HubSessionContext, msg notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
-
 	// Get discovery info from the server via callback, including the appropriate certificate.  Note that
 	// this is the SECOND discovery request made during processing of the discovery message, and if the
 	// handlers had to be assigned they would've been assigned in the previous call above.
@@ -686,13 +716,13 @@ func hubDiscovery(ctx context.Context, session *HubSessionContext, msg notehubMe
 		serviceCertCRC32 := crc32.ChecksumIEEE(discinfo.HubCert)
 		if clientCertCRC32 != serviceCertCRC32 {
 
-			debugf("PERFORMING CERTIFICATE ROTATION\n")
+			logDebug("PERFORMING CERTIFICATE ROTATION")
 
 			newNotefile := CreateNotefile(false)
 			xnote, err := note.CreateNote(nil, discinfo.HubCert)
 			if err == nil {
 				noteID := "result"
-				err = newNotefile.AddNote(discinfo.HubEndpointID, noteID, xnote)
+				_, err = newNotefile.AddNote(discinfo.HubEndpointID, noteID, xnote)
 				if err == nil {
 					if rsp.SetNotefile(newNotefile) == nil {
 						rsp.NoteID = noteID
@@ -706,7 +736,6 @@ func hubDiscovery(ctx context.Context, session *HubSessionContext, msg notehubMe
 
 	// Done
 	return nil
-
 }
 
 // Notebox Changes
@@ -763,7 +792,7 @@ func hubNoteboxMerge(ctx context.Context, session *HubSessionContext, req notehu
 	}
 
 	// Update the list of notefiles
-	notefiles, _ := box.Notefiles(false)
+	notefiles := box.Notefiles(false)
 	for _, notefileID := range notefiles {
 		sawNotefile(session, box, notefileID)
 	}
@@ -969,7 +998,6 @@ func hubNotefileUpdateChangeTracker(ctx context.Context, session *HubSessionCont
 	box.Close(ctx)
 
 	return nil
-
 }
 
 // Notebox Summary
@@ -987,25 +1015,24 @@ func hubNoteboxSummary(ctx context.Context, session *HubSessionContext, req note
 	sessionIDPrev := box.Notefile().swapTrackerSessionID(req.DeviceEndpointID, req.SessionIDNext)
 	if sessionIDPrev != req.SessionIDPrev {
 		if debugSync {
-			debugf("Reset trackers because of ID mismatch (was %d, expecting %d now %d)\n", sessionIDPrev, req.SessionIDPrev, req.SessionIDNext)
+			logDebug("Reset trackers because of ID mismatch (was %d, expecting %d now %d)", sessionIDPrev, req.SessionIDPrev, req.SessionIDNext)
 		}
 		box.ClearAllTrackers(ctx, req.DeviceEndpointID)
 		rsp.SessionIDMismatch = true
 	}
-	box.Checkpoint(ctx)
+	err2 = box.Checkpoint(ctx)
+	if err2 != nil {
+		logError("Error checkpointing notebox: %v", err2)
+	}
 
 	// Set the notification context
 	box.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
 
 	// Update the environment vars for the notebox, which may result in a changed _env.dbs
-	hubUpdateEnvVars(box, req.DeviceUID, appUID)
+	hubUpdateEnvVars(ctx, box, req.DeviceUID, appUID, true)
 
 	// Get the info
-	fileChanges, err4 := box.GetChangedNotefiles(ctx, req.DeviceEndpointID)
-	if err4 != nil {
-		err = err4
-		return
-	}
+	fileChanges := box.GetChangedNotefiles(ctx, req.DeviceEndpointID)
 
 	// In an attempt to reduce the use of the buffer below, skim files that are obviously
 	// never going to be "pulled" by the device, regardless of whether or not they were
@@ -1040,6 +1067,7 @@ func hubNoteboxSummary(ctx context.Context, session *HubSessionContext, req note
 }
 
 // Notefile AddNote, which is used only by the (undocumented) "live" note add
+// NotefileIDs is overloaded with the OLC 'where' of the note, if any.
 func hubNotefileAddNote(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
 	// Open the box
 	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
@@ -1070,7 +1098,7 @@ func hubNotefileAddNote(ctx context.Context, session *HubSessionContext, req not
 	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
 
 	// Perform the operation
-	var body, payload []byte
+	var body []byte
 	ibody, err5 := req.GetBody()
 	if err5 != nil {
 		err = err5
@@ -1078,20 +1106,17 @@ func hubNotefileAddNote(ctx context.Context, session *HubSessionContext, req not
 		body, err = note.JSONMarshal(ibody)
 	}
 	if err == nil {
-		payload, err = req.GetPayload()
-	}
-	if err == nil {
 		var newNote note.Note
-		newNote, err = note.CreateNote(body, payload)
+		newNote, err = note.CreateNote(body, req.GetPayload())
 		if err == nil {
 
 			// Set the note's time and location
-			history := newHistory(req.DeviceEndpointID, req.Until, req.MotionOrientation, req.Since, 0)
+			history := newHistory(req.DeviceEndpointID, req.Until, req.NotefileIDs, req.Since, 0)
 			histories := append([]note.History{}, history)
 			newNote.Histories = &histories
 
 			// Add the note to the notefile with history set up here
-			err = file.AddNoteWithHistory(req.DeviceEndpointID, req.NoteID, newNote)
+			_, err = file.AddNoteWithHistory(req.DeviceEndpointID, req.NoteID, newNote)
 			if err == nil {
 
 				// If this is an outbound queue, purge ALL tombstones from the
@@ -1182,7 +1207,7 @@ func hubNotefileUpdateNote(ctx context.Context, session *HubSessionContext, req 
 		box.Close(ctx)
 		return
 	}
-	var body, payload []byte
+	var body []byte
 	ibody, err6 := req.GetBody()
 	if err6 != nil {
 		err = err6
@@ -1190,29 +1215,29 @@ func hubNotefileUpdateNote(ctx context.Context, session *HubSessionContext, req 
 		body, err = note.JSONMarshal(ibody)
 	}
 	if err == nil {
-		payload, err = req.GetPayload()
-	}
-	if err == nil {
-		xnote.SetBody(body)
-		xnote.SetPayload(payload)
+		xnote.SetPayload(req.GetPayload())
+		err = xnote.SetBody(body)
+		if err != nil {
+			err = fmt.Errorf("hubNotefileUpdateNote unable to set note body: %s", err)
+		}
 	}
 	if err == nil {
 		err = file.UpdateNote(req.DeviceEndpointID, req.NoteID, xnote)
-	}
-	if err != nil {
-		openfile.Close(ctx)
-		box.Close(ctx)
-		return err
 	}
 
 	// Done
 	openfile.Close(ctx)
 	box.Close(ctx)
 
-	return nil
+	return err
 }
 
-// Read a file range
+// Read a file range, with message fields being used/overloaded as follows:
+// NotefileIDs is the filename
+// Since is the offset
+// Until is the length
+// NoteID is the file type
+// MaxChanges is an indication (a maximum size on device) to return the binary as a binary payload
 func hubReadFile(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
 	// If callback not set, this function can't function
 	if fnHubReadFile == nil {
@@ -1232,14 +1257,21 @@ func hubReadFile(ctx context.Context, session *HubSessionContext, req notehubMes
 	offset := int32(req.Since)
 	length := int32(req.Until)
 	filetype := req.NoteID
+	returnUncompressedBinary := req.MaxChanges != 0
 
 	// Perform the read, and always do it compressed because the device firmware does a decompress.
 	getInfo := offset == 0
-	body, payload, err2 := fnHubReadFile(appUID, filetype, filename, offset, length, true, getInfo)
+	body, payload, err2 := fnHubReadFile(appUID, filetype, filename, offset, length, !returnUncompressedBinary, getInfo)
 	if err2 != nil {
 		err = err2
 		box.Close(ctx)
 		return
+	}
+
+	// If we'd like the binary returned uncompressed as the response payload, do so
+	if returnUncompressedBinary {
+		rsp.SetPayload(payload)
+		payload = nil
 	}
 
 	// Create a note within a new notefile in order to return the result
@@ -1254,7 +1286,7 @@ func hubReadFile(ctx context.Context, session *HubSessionContext, req notehubMes
 		box.Close(ctx)
 		return
 	}
-	err = newNotefile.AddNote(req.DeviceEndpointID, "result", xnote)
+	_, err = newNotefile.AddNote(req.DeviceEndpointID, "result", xnote)
 	if err != nil {
 		box.Close(ctx)
 		return
@@ -1271,7 +1303,6 @@ func hubReadFile(ctx context.Context, session *HubSessionContext, req notehubMes
 
 // Notebox Checkpoint
 func hubCheckpoint(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
-
 	// Open the box
 	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
 	if err2 != nil {
@@ -1280,7 +1311,7 @@ func hubCheckpoint(ctx context.Context, session *HubSessionContext, req notehubM
 	}
 
 	// Do the checkpoint
-	box.Checkpoint(ctx)
+	err = box.Checkpoint(ctx)
 
 	// Done
 	box.Close(ctx)
@@ -1296,6 +1327,13 @@ func RegisterTLSSupport() {
 // TLSSupport tells the discover module that we do support TLS
 func TLSSupport() bool {
 	return serverSupportsTLS
+}
+
+// filterForLog removes fields from a notehub request which contain customer data and should not be logged and returns a filteredNotehubMessage for logging purposes.
+func filterForLog(req notehubMessage) notehubMessage {
+	req.nf = nil
+	req.cf = nil
+	return req
 }
 
 // Debugging function to display message name in a friendly way
