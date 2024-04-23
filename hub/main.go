@@ -50,8 +50,10 @@ func main() {
 	serverPortTCPS = ":8086"
 
 	// Initialize file system folders
-	eventLogInit(os.Getenv("HOME") + "/note/events")
-	notelib.FileSetStorageLocation(os.Getenv("HOME") + "/note/notefiles")
+	eventDir := os.Getenv("HOME") + "/note/events"
+	eventLogInit(eventDir)
+	notefileDir := os.Getenv("HOME") + "/note/notefiles"
+	notelib.FileSetStorageLocation(notefileDir)
 
 	// Set discovery callback
 	notelib.HubSetDiscover(NotehubDiscover)
@@ -59,9 +61,12 @@ func main() {
 	// Spawn the TCP listeners
 	go tcpHandler()
 	go tcpsHandler()
-	fmt.Printf("\nON DEVICE, SET HOST USING:\n'{\"req\":\"service.set\",\"host\":\"tcp:%s%s|tcps:%s%s\"}'\n\n",
+	fmt.Printf("\nON DEVICE, SET HOST USING:\n'{\"req\":\"hub.set\",\"host\":\"tcp:%s%s|tcps:%s%s\",\"product\":\"<your-product-uid>\"}'\n\n",
 		serverAddress, serverPortTCP, serverAddress, serverPortTCPS)
-	fmt.Printf("TO RESTORE DEVICE'S HUB CONFIGURATION, USE:\n'{\"req\":\"service.set\",\"host\":\"-\"}'\n\n")
+	fmt.Printf("TO RESTORE DEVICE'S HUB CONFIGURATION, USE:\n'{\"req\":\"hub.set\",\"host\":\"-\"}'\n\n")
+	fmt.Printf("Your hub's   data will be stored in: %s\n", notefileDir)
+	fmt.Printf("Your hub's events will be stored in: %s\n", eventDir)
+	fmt.Printf("\n")
 
 	// Spawn HTTP for inbound web requests
 	http.HandleFunc(serverHTTPReqTopic, httpReqHandler)

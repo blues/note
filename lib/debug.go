@@ -6,6 +6,7 @@
 package notelib
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -71,13 +72,13 @@ func DebugSet(which string, value string) {
 	for i := range text {
 		if text[i] == which {
 			*(vars[i]) = boolValue
-			logInfo("%s is now %t", which, boolValue)
+			logInfo(context.Background(), "%s is now %t", which, boolValue)
 			return
 		}
 	}
 
 	// Failure
-	logError("notelib debug setting %s not found", which)
+	logError(context.Background(), "notelib debug setting %s not found", which)
 }
 
 // Get the value of a boolean environment variable
@@ -94,55 +95,58 @@ func debugEnv(which string) (isAvail bool, value bool) {
 	if i == 0 {
 		return true, false
 	}
-	logInfo("%s is ENABLED", envvar)
+	logInfo(context.Background(), "%s is ENABLED", envvar)
 	return true, true
 }
 
 // Log functions with printf-style args
-var debugLoggerFunc func(string)
+var debugLoggerFunc LogFunc
 
-func logDebug(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
+func logDebug(ctx context.Context, format string, args ...interface{}) {
 	if debugLoggerFunc != nil {
-		debugLoggerFunc(message)
+		debugLoggerFunc(ctx, format, args...)
 	} else {
-		defaultLogger(message)
+		defaultLogger(ctx, format, args...)
 	}
 }
 
-var infoLoggerFunc func(string)
+var infoLoggerFunc LogFunc
 
-func logInfo(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
+func logInfo(ctx context.Context, format string, args ...interface{}) {
 	if infoLoggerFunc != nil {
-		infoLoggerFunc(message)
+		infoLoggerFunc(ctx, format, args...)
 	} else {
-		defaultLogger(message)
+		defaultLogger(ctx, format, args...)
 	}
 }
 
-var warnLoggerFunc func(string)
+var warnLoggerFunc LogFunc
 
-func logWarn(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
+func logWarn(ctx context.Context, format string, args ...interface{}) {
 	if warnLoggerFunc != nil {
-		warnLoggerFunc(message)
+		warnLoggerFunc(ctx, format, args...)
 	} else {
-		defaultLogger(message)
+		defaultLogger(ctx, format, args...)
 	}
 }
 
-var errorLoggerFunc func(string)
+var errorLoggerFunc LogFunc
 
-func logError(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
+func logError(ctx context.Context, format string, args ...interface{}) {
 	if errorLoggerFunc != nil {
-		errorLoggerFunc(message)
+		errorLoggerFunc(ctx, format, args...)
 	} else {
-		defaultLogger(message)
+		defaultLogger(ctx, format, args...)
 	}
 }
-func InitLogging(debugFunc func(string), infoFunc func(string), warnFunc func(string), errorFunc func(string)) {
+
+type LogFunc func(ctx context.Context, msg string, v ...interface{})
+
+func InitLogging(
+	debugFunc LogFunc,
+	infoFunc LogFunc,
+	warnFunc LogFunc,
+	errorFunc LogFunc) {
 	debugEnvInit()
 	debugLoggerFunc = debugFunc
 	infoLoggerFunc = infoFunc
@@ -159,11 +163,13 @@ var (
 // Output a debug string to local buffering, in a synchronized manner, and enqueue it for background
 // output on the console.  We do this because many of our debug routines are done at interrupt level,
 // and fmt.Printf is notoriously slow.
-func defaultLogger(message string) {
+func defaultLogger(ctx context.Context, format string, args ...interface{}) {
 	// Exit if not yet initialized
 	if !loggerInitialized {
 		defaultLoggerInit()
 	}
+
+	message := fmt.Sprintf(format, args...)
 
 	// Append to what's pending, unless the channel is full, in which case we drop it and move on
 	if synchronous {

@@ -13,7 +13,7 @@ import (
 
 	"github.com/blues/note-go/note"
 	notelib "github.com/blues/note/lib"
-	olc "github.com/google/open-location-code/go"
+	golc "github.com/google/open-location-code/go"
 	"github.com/google/uuid"
 )
 
@@ -27,13 +27,11 @@ func eventLogInit(dir string) {
 }
 
 // Event handling procedure
-func notehubEvent(ctx context.Context, context interface{}, local bool, file *notelib.Notefile, event *note.Event) (err error) {
+func notehubEvent(ctx context.Context, session *notelib.HubSession, local bool, file *notelib.Notefile, event *note.Event) (err error) {
 	// Retrieve the session context
-	session := context.(*notelib.HubSessionContext)
 
 	// If this is a queue and this is a template note, recursively expand it to multiple notifications
 	if event.Bulk {
-		session := context.(*notelib.HubSessionContext)
 		eventBulk(session, local, file, *event)
 		return
 	}
@@ -71,7 +69,7 @@ func notehubEvent(ctx context.Context, context interface{}, local bool, file *no
 }
 
 // For bulk data, process the template and payload, generating recursive notifications
-func eventBulk(session *notelib.HubSessionContext, local bool, file *notelib.Notefile, event note.Event) (err error) {
+func eventBulk(session *notelib.HubSession, local bool, file *notelib.Notefile, event note.Event) (err error) {
 	// Get the template from the note
 	bodyJSON, err := note.JSONMarshal(event.Body)
 	if err != nil {
@@ -87,8 +85,8 @@ func eventBulk(session *notelib.HubSessionContext, local bool, file *notelib.Not
 	// Parse each entry within the payload
 	for {
 
-		// Get the next entry (ignoring OLC until we are ready to support it)
-		body, payload, when, where, wherewhen, _, _, success := bdc.BulkDecodeNextEntry()
+		// Get the next entry
+		body, payload, when, wherewhen, olc, _, success := bdc.BulkDecodeNextEntry()
 		if !success {
 			break
 		}
@@ -97,12 +95,12 @@ func eventBulk(session *notelib.HubSessionContext, local bool, file *notelib.Not
 		nn := event
 		nn.Req = note.EventAdd
 		nn.When = when
-		nn.WhereWhen = wherewhen
-		nn.Where = notelib.OLCFromINT64(where)
+		nn.Where = olc
 		if nn.Where != "" {
-			area, err := olc.Decode(nn.Where)
+			area, err := golc.Decode(nn.Where)
 			if err == nil {
 				nn.WhereLat, nn.WhereLon = area.Center()
+				nn.WhereWhen = wherewhen
 			}
 		}
 		nn.Updates = 1

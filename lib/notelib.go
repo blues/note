@@ -23,6 +23,8 @@ import (
 // future use, and at that time we will augment the Body
 // data structure to accomodate the new type of data.
 
+const TemplateFlagClearAfterSync = 0x00000001
+
 type notefileDesc struct {
 	// Optional metadata about the notefile
 	Info *note.NotefileInfo `json:"i,omitempty"`
@@ -32,6 +34,8 @@ type notefileDesc struct {
 	BodyTemplate    string `json:"B,omitempty"`
 	PayloadTemplate uint32 `json:"P,omitempty"`
 	TemplateFormat  uint32 `json:"f,omitempty"`
+	TemplatePort    uint16 `json:"X,omitempty"`
+	TemplateFlags   uint32 `json:"d,omitempty"`
 }
 
 type noteboxBody struct {
@@ -78,7 +82,7 @@ type Notebox struct {
 	instance *NoteboxInstance
 	// Default parameters to be passed to notefiles being opened in notebox
 	defaultEventFn         EventFunc   // The function to call when notifying of a change
-	defaultEventCtx        interface{} // And a parameter
+	defaultEventSession    *HubSession // And a parameter TODO rename
 	defaultEventDeviceUID  string
 	defaultEventDeviceSN   string
 	defaultEventProductUID string

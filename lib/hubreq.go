@@ -37,13 +37,13 @@ func hubUpdateEnvVars(ctx context.Context, box *Notebox, deviceUID string, appUI
 	if fnNoteboxUpdateEnv != nil {
 		err := fnNoteboxUpdateEnv(ctx, box, deviceUID, appUID, updateFeeds)
 		if err != nil {
-			logDebug("env: can't update env vars: %s", err)
+			logDebug(ctx, "env: can't update env vars: %s", err)
 		}
 	}
 }
 
 // GetNotificationFunc retrieves hub notifications to be sent to client
-type GetNotificationFunc func(ctx context.Context, deviceEndpointID string, deviceMonitorID int64) (notifications []string)
+type GetNotificationFunc func(ctx context.Context, deviceEndpointID string, session *HubSession) (notifications []string)
 
 var fnHubNotifications GetNotificationFunc
 
@@ -63,7 +63,7 @@ func HubSetReadFile(fn ReadFileFunc) {
 }
 
 // WebRequestFunc performs a web request on behalf of a device
-type WebRequestFunc func(ctx context.Context, deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqoffset int, reqmaxbytes int, target string, bodyJSON []byte, payload []byte) (rspstatuscode int, rspheader map[string][]string, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
+type WebRequestFunc func(ctx context.Context, sess *HubSession, deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqoffset int, reqmaxbytes int, target string, bodyJSON []byte, payload []byte) (rspstatuscode int, rspheader map[string][]string, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
 
 var fnHubWebRequest WebRequestFunc
 
@@ -73,7 +73,7 @@ func HubSetWebRequest(fn WebRequestFunc) {
 }
 
 // SignalFunc performs a web request on behalf of a device
-type SignalFunc func(deviceUID string, bodyJSON []byte, payload []byte, session *HubSessionContext) (err error)
+type SignalFunc func(deviceUID string, bodyJSON []byte, payload []byte, session *HubSession) (err error)
 
 var fnHubSignal SignalFunc
 
@@ -96,14 +96,13 @@ func HubCheckpointRequest() (message []byte, err error) {
 // a single session.  The return arguments should be interpreted as follows:
 // - if err is returned, do not return a reply to the remote requestor
 // - if err is nil, always send result back to request
-func HubRequest(ctx context.Context, content []byte, event EventFunc, context interface{}) (reqtype string, result []byte, suppress bool, err error) {
+func HubRequest(ctx context.Context, content []byte, event EventFunc, session *HubSession) (reqtype string, result []byte, suppress bool, err error) {
 	// Preset in case of error return
 	var rsp notehubMessage
 	rsp.Version = currentProtocolVersion
 
 	// Retrieve the session context
-	session, present := ctx.Value(HubSessionContextKey).(*HubSessionContext)
-	if !present {
+	if session == nil {
 		err = fmt.Errorf("no hub session context")
 		return
 	}
@@ -120,13 +119,9 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, context in
 	reqtype = msgTypeName(req.MessageType)
 	reqStart := time.Now()
 
-	// Display the request being processed
-	if debugHubRequest {
-		// Pass req through FilterForLog function to remove customer data before logging.
-		filteredMsg := filterForLog(req)
-		filteredJSON, _ := note.JSONMarshal(filteredMsg)
-		logInfo("%s Request #%d (%db wire) %s %s", session.IdForLogging, session.Transactions, wirelen, reqtype, filteredJSON)
-	}
+	filteredMsg := filterForLog(req)
+	filteredJSON, _ := note.JSONMarshal(filteredMsg)
+	session.LogInfo(ctx, "Request #%d (%db wire) %s %s", session.Transactions, wirelen, reqtype, filteredJSON)
 
 	// Authenticate the session
 	if !session.Active {
@@ -140,13 +135,13 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, context in
 			if req.MessageType == msgDiscover {
 				if TLSSupport() && !session.Session.TLSSession {
 					err = fmt.Errorf("secure session required " + note.ErrAuth)
-					logWarn("%s: attempt to discover with unsecure session", req.DeviceUID)
+					session.LogWarn(ctx, "%s: attempt to discover with unsecure session", req.DeviceUID)
 				}
 			} else {
 				// If the ticket isn't an exact match, then it's not a valid connect attemp
 				if sessionTicket == "" || sessionTicket != req.HubSessionTicket {
 					err = fmt.Errorf("session not authorized " + note.ErrAuth + note.ErrTicket)
-					logWarn("TICKET REJECTED for %s (server may have been restarted)\n    Assigned: %s\n   Requested: %s", req.DeviceUID, sessionTicket, req.HubSessionTicket)
+					session.LogWarn(ctx, "TICKET REJECTED for %s (server may have been restarted)\n    Assigned: %s\n   Requested: %s", req.DeviceUID, sessionTicket, req.HubSessionTicket)
 				}
 			}
 		}
@@ -166,7 +161,6 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, context in
 		} else {
 			req.DeviceUID = session.Session.DeviceUID
 			req.DeviceSN = session.Session.DeviceSN
-			req.ProductUID = session.Session.ProductUID
 			req.DeviceEndpointID = session.DeviceEndpointID
 			req.HubEndpointID = session.HubEndpointID
 			req.HubSessionTicket = session.HubSessionTicket
@@ -184,6 +178,11 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, context in
 			req.CellID = session.Session.CellID
 		}
 
+		// Make sure that we refresh the ProductUID from the session regardless of whether this
+		// is the first transaction or a subsequent transaction because the session may have
+		// redirected us to a different productUID
+		req.ProductUID = session.Session.ProductUID
+
 		// If there is a null session ticket, the only request that's permitted is a Discover request.
 		if req.HubSessionTicket == "" && req.MessageType != msgDiscover {
 			err = fmt.Errorf("transaction is not allowed "+note.ErrAuth+" without a session ticket: %s", reqtype)
@@ -191,7 +190,7 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, context in
 
 		// Process it and generate the return results
 		if err == nil {
-			rsp = processRequest(ctx, session, req, event, context)
+			rsp = processRequest(ctx, session, req, event)
 		}
 
 	}
@@ -220,7 +219,7 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, context in
 			offsetSecondsEastOfUTC := 0
 			location, err := time.LoadLocation(lastKnownLocation.TimeZone)
 			if err != nil {
-				logWarn("*** Can't load location for: %s", lastKnownLocation.TimeZone)
+				session.LogWarn(ctx, "*** Can't load location for: %s", lastKnownLocation.TimeZone)
 			} else {
 				localTime := time.Now().In(location)
 				shortZone, offsetSecondsEastOfUTC = localTime.Zone()
@@ -249,16 +248,13 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, context in
 	}
 
 	// Display the result
-	if debugHubRequest {
-		// Pass rsp through filterForLog function to remove customer data before logging.
-		filteredRsp := filterForLog(rsp)
-		filteredJSON, _ := note.JSONMarshal(filteredRsp)
-		suppressedMsg := ""
-		if suppress {
-			suppressedMsg = " SUPPRESSED"
-		}
-		logInfo("%s Response #%d (%db wire%s) %s in %s %s", session.IdForLogging, session.Transactions, wirelen, suppressedMsg, reqtype, time.Since(reqStart), filteredJSON)
+	filteredRsp := filterForLog(rsp)
+	filteredJSON, _ = note.JSONMarshal(filteredRsp)
+	suppressedMsg := ""
+	if suppress {
+		suppressedMsg = " SUPPRESSED"
 	}
+	session.LogInfo(ctx, "Response #%d (%db wire%s) %s in %s %s", session.Transactions, wirelen, suppressedMsg, reqtype, time.Since(reqStart), filteredJSON)
 
 	// Done
 	return
@@ -266,7 +262,7 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, context in
 
 // HubErrorResponse creates an error response message to be sent to the client device, and
 // terminates the session so that no further requests can be processed.
-func HubErrorResponse(session *HubSessionContext, errorMessage string) (result []byte) {
+func HubErrorResponse(ctx context.Context, session *HubSession, errorMessage string) (result []byte) {
 	var rsp notehubMessage
 
 	// Put the session into a terminated state because of the error
@@ -284,16 +280,14 @@ func HubErrorResponse(session *HubSessionContext, errorMessage string) (result [
 	result = response
 
 	// Display the result
-	if debugHubRequest {
-		logInfo("%s Response #%d (%db wire) Error %s", session.IdForLogging, session.Transactions, wirelen, errorMessage)
-	}
+	session.LogInfo(ctx, "Response #%d (%db wire) Error %s", session.Transactions, wirelen, errorMessage)
 
 	// Done
 	return
 }
 
 // processRequest processes a request message
-func processRequest(ctx context.Context, session *HubSessionContext, req notehubMessage, event EventFunc, context interface{}) (response notehubMessage) {
+func processRequest(ctx context.Context, session *HubSession, req notehubMessage, event EventFunc) (response notehubMessage) {
 	var err error
 
 	// Default fields in the response data structure
@@ -316,55 +310,55 @@ func processRequest(ctx context.Context, session *HubSessionContext, req notehub
 		// This is a nil transaction
 
 	case msgGetNotification:
-		err = hubGetNotification(ctx, session, req, &rsp, event, context)
+		err = hubGetNotification(ctx, session, req, &rsp, event)
 
 	case msgDiscover:
-		err = hubDiscovery(ctx, session, req, &rsp, event, context)
+		err = hubDiscovery(ctx, session, req, &rsp, event)
 
 	case msgNoteboxSummary:
-		err = hubNoteboxSummary(ctx, session, req, &rsp, event, context)
+		err = hubNoteboxSummary(ctx, session, req, &rsp, event)
 
 	case msgNoteboxChanges:
-		err = hubNoteboxChanges(ctx, session, req, &rsp, event, context)
+		err = hubNoteboxChanges(ctx, session, req, &rsp, event)
 
 	case msgNoteboxMerge:
-		err = hubNoteboxMerge(ctx, session, req, &rsp, event, context)
+		err = hubNoteboxMerge(ctx, session, req, &rsp, event)
 
 	case msgNoteboxUpdateChangeTracker:
-		err = hubNoteboxUpdateChangeTracker(ctx, session, req, &rsp, event, context)
+		err = hubNoteboxUpdateChangeTracker(ctx, session, req, &rsp, event)
 
 	case msgNotefileChanges:
-		err = hubNotefileChanges(ctx, session, req, &rsp, event, context)
+		err = hubNotefileChanges(ctx, session, req, &rsp, event)
 
 	case msgNotefileMerge:
-		err = hubNotefileMerge(ctx, session, req, &rsp, event, context)
+		err = hubNotefileMerge(ctx, session, req, &rsp, event)
 
 	case msgNotefilesMerge:
-		err = hubNotefilesMerge(ctx, session, req, &rsp, event, context)
+		err = hubNotefilesMerge(ctx, session, req, &rsp, event)
 
 	case msgNotefileUpdateChangeTracker:
-		err = hubNotefileUpdateChangeTracker(ctx, session, req, &rsp, event, context)
+		err = hubNotefileUpdateChangeTracker(ctx, session, req, &rsp, event)
 
 	case msgNotefileAddNote:
-		err = hubNotefileAddNote(ctx, session, req, &rsp, event, context)
+		err = hubNotefileAddNote(ctx, session, req, &rsp, event)
 
 	case msgNotefileDeleteNote:
-		err = hubNotefileDeleteNote(ctx, session, req, &rsp, event, context)
+		err = hubNotefileDeleteNote(ctx, session, req, &rsp, event)
 
 	case msgNotefileUpdateNote:
-		err = hubNotefileUpdateNote(ctx, session, req, &rsp, event, context)
+		err = hubNotefileUpdateNote(ctx, session, req, &rsp, event)
 
 	case msgReadFile:
-		err = hubReadFile(ctx, session, req, &rsp, event, context)
+		err = hubReadFile(ctx, session, req, &rsp, event)
 
 	case msgWebRequest:
-		err = hubWebRequest(ctx, session, req, &rsp, event, context)
+		err = hubWebRequest(ctx, session, req, &rsp, event)
 
 	case msgSignal:
-		err = hubSignal(ctx, session, req, &rsp, event, context)
+		err = hubSignal(ctx, session, req, &rsp, event)
 
 	case msgCheckpoint:
-		err = hubCheckpoint(ctx, session, req, &rsp, event, context)
+		err = hubCheckpoint(ctx, session, req, &rsp, event)
 
 	}
 
@@ -377,7 +371,7 @@ func processRequest(ctx context.Context, session *HubSessionContext, req notehub
 }
 
 // Open the endpoint's notebox
-func openHubNoteboxForDevice(ctx context.Context, session *HubSessionContext, deviceUID string, deviceSN string, productUID string, endpointID string, event EventFunc, context interface{}) (box *Notebox, appUID string, err error) {
+func openHubNoteboxForDevice(ctx context.Context, session *HubSession, deviceUID string, deviceSN string, productUID string, endpointID string, event EventFunc) (box *Notebox, appUID string, err error) {
 	// Ensure that hub endpoint is available
 	var hubEndpointID, deviceStorageObject string
 	_, hubEndpointID, appUID, deviceStorageObject, err = HubDiscover(deviceUID, deviceSN, productUID)
@@ -392,7 +386,7 @@ func openHubNoteboxForDevice(ctx context.Context, session *HubSessionContext, de
 	}
 
 	// Set the default notification context for files opened within this box instance
-	box.SetEventInfo(deviceUID, deviceSN, productUID, appUID, event, context)
+	box.SetEventInfo(deviceUID, deviceSN, productUID, appUID, event, session)
 
 	// If we haven't yet enum'ed the notefiles, do so
 	sawNotefile(session, box, "")
@@ -402,7 +396,7 @@ func openHubNoteboxForDevice(ctx context.Context, session *HubSessionContext, de
 }
 
 // Ensure that the specified notefile is in the list
-func sawNotefile(session *HubSessionContext, box *Notebox, notefileID string) {
+func sawNotefile(session *HubSession, box *Notebox, notefileID string) {
 	// First time through
 	if !session.NotefilesUpdated {
 		session.Notefiles = box.Notefiles(false)
@@ -439,7 +433,7 @@ func sawNotefile(session *HubSessionContext, box *Notebox, notefileID string) {
 // HighPowerSecsGPS is an indication (a maximum size on device) to return the binary as a binary payload
 // SessionTrigger is MD5 (in both directions)
 // MaxChanges on the response is the HTTP status code
-func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	if fnHubWebRequest == nil {
 		return fmt.Errorf("no web request handler has been set " + note.ErrHubNoHandler)
 	}
@@ -563,9 +557,9 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 	// Process web requests asynchronously if desired
 	if req.SuppressResponse {
 		go func() {
-			_, _, _, _, err := fnHubWebRequest(ctx, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, snote.GetBody(), snote.Payload)
+			_, _, _, _, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, snote.GetBody(), snote.Payload)
 			if err != nil {
-				logInfo("error during async web request: %s", err)
+				logInfo(ctx, "error during async web request: %s", err)
 			}
 		}()
 		return nil
@@ -573,7 +567,7 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 
 	// Perform the web request.  If an error occurs, place the result in rsp.Error but
 	// continue processing the transaction.
-	statuscode, rspHeader, rspBodyJSON, rspPayload, err := fnHubWebRequest(ctx, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, snote.GetBody(), snote.Payload)
+	statuscode, rspHeader, rspBodyJSON, rspPayload, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, snote.GetBody(), snote.Payload)
 	if err != nil {
 		rsp.Error = fmt.Sprintf("%s", err)
 	}
@@ -630,7 +624,7 @@ func hubWebRequest(ctx context.Context, session *HubSessionContext, req notehubM
 }
 
 // Perform Signal
-func hubSignal(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubSignal(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	if fnHubSignal == nil {
 		return fmt.Errorf("no signal request handler has been set " + note.ErrHubNoHandler)
 	}
@@ -655,7 +649,7 @@ func hubSignal(ctx context.Context, session *HubSessionContext, req notehubMessa
 }
 
 // Get Notification message
-func hubGetNotification(ctx context.Context, session *HubSessionContext, msg notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubGetNotification(ctx context.Context, session *HubSession, msg notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// These conditions should never happen
 	if fnHubNotifications == nil {
 		return fmt.Errorf("no notification handler has been set " + note.ErrHubNoHandler)
@@ -668,7 +662,7 @@ func hubGetNotification(ctx context.Context, session *HubSessionContext, msg not
 	}
 
 	// Get the changes pending
-	changes := fnHubNotifications(ctx, msg.DeviceEndpointID, session.DeviceMonitorID)
+	changes := fnHubNotifications(ctx, msg.DeviceEndpointID, session)
 
 	// Turn the changes into a payload
 	payload := []byte(strings.Join(changes, "\n"))
@@ -691,11 +685,11 @@ func hubGetNotification(ctx context.Context, session *HubSessionContext, msg not
 }
 
 // Discover request processing
-func hubDiscovery(ctx context.Context, session *HubSessionContext, msg notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubDiscovery(ctx context.Context, session *HubSession, msg notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Get discovery info from the server via callback, including the appropriate certificate.  Note that
 	// this is the SECOND discovery request made during processing of the discovery message, and if the
 	// handlers had to be assigned they would've been assigned in the previous call above.
-	discinfo, err2 := hubProcessDiscoveryRequest(msg.DeviceUID, msg.DeviceSN, msg.ProductUID, msg.HubSessionHandler)
+	discinfo, err2 := hubProcessDiscoveryRequest(msg.DeviceUID, msg.DeviceSN, msg.ProductUID, msg.HubSessionHandler, msg.HubPacketHandler)
 	if err2 != nil {
 		return err2
 	}
@@ -703,6 +697,7 @@ func hubDiscovery(ctx context.Context, session *HubSessionContext, msg notehubMe
 	// Return info about hub
 	rsp.HubTimeNs = discinfo.HubTimeNs
 	rsp.HubEndpointID = discinfo.HubEndpointID
+	rsp.HubPacketHandler = discinfo.HubPacketHandler
 	rsp.HubSessionHandler = discinfo.HubSessionHandler
 	rsp.HubSessionTicket = discinfo.HubSessionTicket
 	rsp.HubSessionTicketExpiresTimeSec = discinfo.HubSessionTicketExpiresTimeNs / 1000000000
@@ -716,7 +711,7 @@ func hubDiscovery(ctx context.Context, session *HubSessionContext, msg notehubMe
 		serviceCertCRC32 := crc32.ChecksumIEEE(discinfo.HubCert)
 		if clientCertCRC32 != serviceCertCRC32 {
 
-			logDebug("PERFORMING CERTIFICATE ROTATION")
+			logDebug(ctx, "PERFORMING CERTIFICATE ROTATION")
 
 			newNotefile := CreateNotefile(false)
 			xnote, err := note.CreateNote(nil, discinfo.HubCert)
@@ -739,9 +734,9 @@ func hubDiscovery(ctx context.Context, session *HubSessionContext, msg notehubMe
 }
 
 // Notebox Changes
-func hubNoteboxChanges(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNoteboxChanges(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -768,9 +763,9 @@ func hubNoteboxChanges(ctx context.Context, session *HubSessionContext, req note
 }
 
 // Notebox Merge
-func hubNoteboxMerge(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNoteboxMerge(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -804,9 +799,9 @@ func hubNoteboxMerge(ctx context.Context, session *HubSessionContext, req notehu
 }
 
 // Update the tracker
-func hubNoteboxUpdateChangeTracker(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNoteboxUpdateChangeTracker(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -826,9 +821,9 @@ func hubNoteboxUpdateChangeTracker(ctx context.Context, session *HubSessionConte
 }
 
 // Notefile Changes
-func hubNotefileChanges(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNotefileChanges(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -866,9 +861,9 @@ func hubNotefileChanges(ctx context.Context, session *HubSessionContext, req not
 }
 
 // Notefile Merge
-func hubNotefileMerge(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNotefileMerge(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -884,7 +879,7 @@ func hubNotefileMerge(ctx context.Context, session *HubSessionContext, req noteh
 	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
+	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
 
 	// Unmarshal the notefile
 	notefile, err5 := req.GetNotefile()
@@ -915,9 +910,9 @@ func hubNotefileMerge(ctx context.Context, session *HubSessionContext, req noteh
 }
 
 // Multi-notefile Merge
-func hubNotefilesMerge(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNotefilesMerge(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -943,7 +938,7 @@ func hubNotefilesMerge(ctx context.Context, session *HubSessionContext, req note
 		sawNotefile(session, box, NotefileID)
 
 		// Set the notification context
-		file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
+		file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
 
 		// Merge the tracked changes
 		err = file.MergeNotefile(chgfile)
@@ -968,9 +963,9 @@ func hubNotefilesMerge(ctx context.Context, session *HubSessionContext, req note
 }
 
 // Update the tracker
-func hubNotefileUpdateChangeTracker(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNotefileUpdateChangeTracker(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1001,9 +996,9 @@ func hubNotefileUpdateChangeTracker(ctx context.Context, session *HubSessionCont
 }
 
 // Notebox Summary
-func hubNoteboxSummary(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1015,18 +1010,18 @@ func hubNoteboxSummary(ctx context.Context, session *HubSessionContext, req note
 	sessionIDPrev := box.Notefile().swapTrackerSessionID(req.DeviceEndpointID, req.SessionIDNext)
 	if sessionIDPrev != req.SessionIDPrev {
 		if debugSync {
-			logDebug("Reset trackers because of ID mismatch (was %d, expecting %d now %d)", sessionIDPrev, req.SessionIDPrev, req.SessionIDNext)
+			logDebug(ctx, "Reset trackers because of ID mismatch (was %d, expecting %d now %d)", sessionIDPrev, req.SessionIDPrev, req.SessionIDNext)
 		}
 		box.ClearAllTrackers(ctx, req.DeviceEndpointID)
 		rsp.SessionIDMismatch = true
 	}
 	err2 = box.Checkpoint(ctx)
 	if err2 != nil {
-		logError("Error checkpointing notebox: %v", err2)
+		logError(ctx, "Error checkpointing notebox: %v", err2)
 	}
 
 	// Set the notification context
-	box.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
+	box.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
 
 	// Update the environment vars for the notebox, which may result in a changed _env.dbs
 	hubUpdateEnvVars(ctx, box, req.DeviceUID, appUID, true)
@@ -1068,9 +1063,9 @@ func hubNoteboxSummary(ctx context.Context, session *HubSessionContext, req note
 
 // Notefile AddNote, which is used only by the (undocumented) "live" note add
 // NotefileIDs is overloaded with the OLC 'where' of the note, if any.
-func hubNotefileAddNote(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1095,7 +1090,7 @@ func hubNotefileAddNote(ctx context.Context, session *HubSessionContext, req not
 	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
+	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
 
 	// Perform the operation
 	var body []byte
@@ -1143,9 +1138,9 @@ func hubNotefileAddNote(ctx context.Context, session *HubSessionContext, req not
 }
 
 // Notefile DeleteNote
-func hubNotefileDeleteNote(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNotefileDeleteNote(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1161,7 +1156,7 @@ func hubNotefileDeleteNote(ctx context.Context, session *HubSessionContext, req 
 	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
+	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
 
 	// Perform the operation
 	err = file.DeleteNote(req.DeviceEndpointID, req.NoteID)
@@ -1179,9 +1174,9 @@ func hubNotefileDeleteNote(ctx context.Context, session *HubSessionContext, req 
 }
 
 // Notefile UpdateNote
-func hubNotefileUpdateNote(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubNotefileUpdateNote(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1197,7 +1192,7 @@ func hubNotefileUpdateNote(ctx context.Context, session *HubSessionContext, req 
 	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, context)
+	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
 
 	// Perform the operation
 	xnote, err5 := file.GetNote(req.NoteID)
@@ -1238,7 +1233,7 @@ func hubNotefileUpdateNote(ctx context.Context, session *HubSessionContext, req 
 // Until is the length
 // NoteID is the file type
 // MaxChanges is an indication (a maximum size on device) to return the binary as a binary payload
-func hubReadFile(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubReadFile(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// If callback not set, this function can't function
 	if fnHubReadFile == nil {
 		err = fmt.Errorf("hub is lacking the capability to read an uploaded file")
@@ -1246,7 +1241,7 @@ func hubReadFile(ctx context.Context, session *HubSessionContext, req notehubMes
 	}
 
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1302,9 +1297,9 @@ func hubReadFile(ctx context.Context, session *HubSessionContext, req notehubMes
 }
 
 // Notebox Checkpoint
-func hubCheckpoint(ctx context.Context, session *HubSessionContext, req notehubMessage, rsp *notehubMessage, event EventFunc, context interface{}) (err error) {
+func hubCheckpoint(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event, context)
+	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1319,9 +1314,9 @@ func hubCheckpoint(ctx context.Context, session *HubSessionContext, req notehubM
 	return err
 }
 
-// RegisterTLSSupport tells the discover module that we do support TLS
-func RegisterTLSSupport() {
-	serverSupportsTLS = true
+// SetTLSSupport tells the discover module that we do support TLS
+func SetTLSSupport(enabled bool) {
+	serverSupportsTLS = enabled
 }
 
 // TLSSupport tells the discover module that we do support TLS

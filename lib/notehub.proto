@@ -66,6 +66,7 @@ message NotehubPB {
     optional bool SuppressResponse = 56;
     optional string Where = 57;
     optional int64 WhereWhen = 58;
+    optional string HubPacketHandler = 59;
 
 }
 

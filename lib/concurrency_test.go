@@ -40,6 +40,7 @@ var startedTests = 0
 var activeTests = 0
 
 func TestConcurrency(t *testing.T) {
+	ctx := context.Background()
 
 	// Set file storage directory
 	FileSetStorageLocation(os.Getenv("HOME") + "/note/notefiles")
@@ -65,7 +66,7 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// Start the tests
-	logDebug("concurrency_test: %d goroutines started", activeTests)
+	logDebug(ctx, "concurrency_test: %d goroutines started", activeTests)
 	startTests = true
 
 	// Let them run for a while
@@ -82,11 +83,12 @@ func TestConcurrency(t *testing.T) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	logDebug("concurrency_test: completed")
+	logDebug(ctx, "concurrency_test: completed")
 
 }
 
 func parallelTest(t *testing.T, testName string, summarizeWork bool, workInstances int, workFn func(testid string) bool) {
+	ctx := context.Background()
 
 	// Start the tests and notify the caller that we've started them
 	counterLock.Lock()
@@ -118,7 +120,7 @@ func parallelTest(t *testing.T, testName string, summarizeWork bool, workInstanc
 	}
 
 	// Validate the results of our tasks
-	logDebug("concurrency_test: %s achieved %d iterations", testName, iterations)
+	logDebug(ctx, "concurrency_test: %s achieved %d iterations", testName, iterations)
 
 	// Done
 	counterLock.Lock()
@@ -129,6 +131,7 @@ func parallelTest(t *testing.T, testName string, summarizeWork bool, workInstanc
 
 // Perform work in parallel
 func parallelWork(workFn func(testid string) bool, summarizeWork bool, pActive *int, iterations *uint64, errors *uint64) {
+	ctx := context.Background()
 
 	// Notify the callers that we've started, and wait for 'go'
 	counterLock.Lock()
@@ -156,7 +159,7 @@ func parallelWork(workFn func(testid string) bool, summarizeWork bool, pActive *
 	// Run down
 	counterLock.Lock()
 	if summarizeWork {
-		logDebug("concurrency: %s achieved %d iterations", testid, localIterations)
+		logDebug(ctx, "concurrency: %s achieved %d iterations", testid, localIterations)
 	}
 	activeTests--
 	(*pActive)--
@@ -170,7 +173,7 @@ func testNotebox(testid string) bool {
 
 	box, err := OpenEndpointNotebox(ctx, "", FileStorageObject(testid), true)
 	if err != nil {
-		logDebug("boxOpen: %s", err)
+		logDebug(ctx, "boxOpen: %s", err)
 		return false
 	}
 
@@ -181,7 +184,7 @@ func testNotebox(testid string) bool {
 		box.DeleteNotefile(ctx, notefileID)
 		err = box.AddNotefile(ctx, notefileID, nil)
 		if err != nil {
-			logDebug("boxAddNotefile: %s", err)
+			logDebug(ctx, "boxAddNotefile: %s", err)
 			return false
 		}
 
@@ -199,7 +202,7 @@ func testNotebox(testid string) bool {
 
 		openfile, nf, err := box.OpenNotefile(ctx, notefileID)
 		if err != nil {
-			logDebug("boxOpenNotefile: %s", err)
+			logDebug(ctx, "boxOpenNotefile: %s", err)
 			return false
 		}
 
@@ -226,7 +229,7 @@ func testNotebox(testid string) bool {
 		for nid := 0; nid < notefiles; nid++ {
 			box.DeleteNotefile(ctx, fmt.Sprintf("notefile%d", nid))
 			if err != nil {
-				logDebug("boxAddNotefile: %s", err)
+				logDebug(ctx, "boxAddNotefile: %s", err)
 				return false
 			}
 		}
@@ -234,7 +237,7 @@ func testNotebox(testid string) bool {
 
 	err = box.Close(ctx)
 	if err != nil {
-		logDebug("boxClose: %s", err)
+		logDebug(ctx, "boxClose: %s", err)
 		return false
 	}
 

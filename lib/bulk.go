@@ -13,6 +13,8 @@
 package notelib
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -99,7 +101,7 @@ func isPointOne(test float64, base float64) bool {
 }
 
 // BulkDecodeTemplate sets up a context for decoding by taking the template and a binary buffer to be decoded
-func BulkDecodeTemplate(templateBodyJSON []byte, compressedPayload []byte) (context BulkTemplateContext, err error) {
+func BulkDecodeTemplate(templateBodyJSON []byte, compressedPayload []byte) (tmplContext BulkTemplateContext, err error) {
 	body := BulkBody{}
 	err = note.JSONUnmarshal(templateBodyJSON, &body)
 	if err != nil {
@@ -112,30 +114,42 @@ func BulkDecodeTemplate(templateBodyJSON []byte, compressedPayload []byte) (cont
 	}
 
 	// Set up the context
-	context.NoteFormat = body.NoteFormat
-	context.Template = body.NoteTemplate
-	context.ORIGTemplatePayloadLen = body.NoteTemplatePayloadLen
+	tmplContext.NoteFormat = body.NoteFormat
+	tmplContext.Template = body.NoteTemplate
+	tmplContext.ORIGTemplatePayloadLen = body.NoteTemplatePayloadLen
 
 	// Parse the template if this is the original format, because in that format entries were not self-describing
 	if body.NoteFormat == BulkNoteFormatOriginal {
-		err = parseORIGTemplate(&context)
+		err = parseORIGTemplate(&tmplContext)
 		if err != nil {
 			return
 		}
 	}
 
+	// 2024-04-11 NF-305 Deal with the odd situation where flexnano format is intentionally snappy-compressed
+	// because it's being sent over cellular.  In this case, we had nowhere to store a flag saying "this is
+	// compressed" and so we use an in-band method.
+	isSnappyCompressed := false
+	snappySig := []byte("snappy$")
+	snappySigLen := len(snappySig)
+	if len(compressedPayload) >= snappySigLen && bytes.Equal(snappySig, compressedPayload[:snappySigLen]) {
+		isSnappyCompressed = true
+		compressedPayload = compressedPayload[snappySigLen:]
+	}
+
 	// Decompress the payload if not flex nano, which is sent uncompressed
-	if body.NoteFormat == BulkNoteFormatFlexNano {
-		context.Bin = compressedPayload
-		context.BinLen = len(context.Bin)
-	} else {
-		context.Bin, err = snappy.Decode(nil, compressedPayload)
-		context.BinLen = len(context.Bin)
+	if body.NoteFormat == BulkNoteFormatFlexNano && !isSnappyCompressed {
+		tmplContext.Bin = compressedPayload
+		tmplContext.BinLen = len(tmplContext.Bin)
+	} else if len(compressedPayload) > 0 {
+		tmplContext.Bin, err = snappy.Decode(nil, compressedPayload)
+		tmplContext.BinLen = len(tmplContext.Bin)
 		if err != nil {
+			err = fmt.Errorf("bulk decode error '%s': template:%s payload:%v", err, string(templateBodyJSON), compressedPayload)
 			return
 		}
 		if debugDecompress {
-			logDebug("\n$$$ BULK DATA $$$: decompressed payload from %d to %d", len(compressedPayload), len(context.Bin))
+			logDebug(context.Background(), "\n$$$ BULK DATA $$$: decompressed payload from %d to %d", len(compressedPayload), len(tmplContext.Bin))
 		}
 	}
 
@@ -143,44 +157,44 @@ func BulkDecodeTemplate(templateBodyJSON []byte, compressedPayload []byte) (cont
 }
 
 // Data extraction routines
-func (context *BulkTemplateContext) binExtract(n int) (value []byte, success bool) {
+func (tmplContext *BulkTemplateContext) binExtract(n int) (value []byte, success bool) {
 	// Catch bogus values of n
-	if n < 0 || (context.BinOffset+n) < 0 {
-		logWarn("bulk underrun: invalid value of n %d at offset %d", n, context.BinOffset)
-		context.BinUnderrun = true
+	if n < 0 || (tmplContext.BinOffset+n) < 0 {
+		logWarn(context.Background(), "bulk underrun: invalid value of n %d at offset %d", n, tmplContext.BinOffset)
+		tmplContext.BinUnderrun = true
 	}
 
-	if (context.BinOffset + n) > context.BinLen {
-		logWarn("bulk underrun: want %d at offset %d but record len is only %d", n, context.BinOffset, context.BinLen)
-		context.BinUnderrun = true
+	if (tmplContext.BinOffset + n) > tmplContext.BinLen {
+		logWarn(context.Background(), "bulk underrun: want %d at offset %d but record len is only %d", n, tmplContext.BinOffset, tmplContext.BinLen)
+		tmplContext.BinUnderrun = true
 	}
-	if context.BinUnderrun {
+	if tmplContext.BinUnderrun {
 		return
 	}
-	value = context.Bin[context.BinOffset : context.BinOffset+n]
-	context.BinOffset += n
+	value = tmplContext.Bin[tmplContext.BinOffset : tmplContext.BinOffset+n]
+	tmplContext.BinOffset += n
 	success = true
 	return
 }
 
-func (context *BulkTemplateContext) binExtractInt8() (value int8) {
-	bin, success := context.binExtract(1)
+func (tmplContext *BulkTemplateContext) binExtractInt8() (value int8) {
+	bin, success := tmplContext.binExtract(1)
 	if !success {
 		return
 	}
 	return int8(bin[0])
 }
 
-func (context *BulkTemplateContext) binExtractUint8() (value uint8) {
-	bin, success := context.binExtract(1)
+func (tmplContext *BulkTemplateContext) binExtractUint8() (value uint8) {
+	bin, success := tmplContext.binExtract(1)
 	if !success {
 		return
 	}
 	return uint8(bin[0])
 }
 
-func (context *BulkTemplateContext) binExtractInt16() (value int16) {
-	bin, success := context.binExtract(2)
+func (tmplContext *BulkTemplateContext) binExtractInt16() (value int16) {
+	bin, success := tmplContext.binExtract(2)
 	if !success {
 		return
 	}
@@ -189,8 +203,8 @@ func (context *BulkTemplateContext) binExtractInt16() (value int16) {
 	return value
 }
 
-func (context *BulkTemplateContext) binExtractUint16() (value uint16) {
-	bin, success := context.binExtract(2)
+func (tmplContext *BulkTemplateContext) binExtractUint16() (value uint16) {
+	bin, success := tmplContext.binExtract(2)
 	if !success {
 		return
 	}
@@ -199,8 +213,8 @@ func (context *BulkTemplateContext) binExtractUint16() (value uint16) {
 	return value
 }
 
-func (context *BulkTemplateContext) binExtractInt24() (value int32) {
-	bin, success := context.binExtract(3)
+func (tmplContext *BulkTemplateContext) binExtractInt24() (value int32) {
+	bin, success := tmplContext.binExtract(3)
 	if !success {
 		return
 	}
@@ -212,8 +226,8 @@ func (context *BulkTemplateContext) binExtractInt24() (value int32) {
 	return value
 }
 
-func (context *BulkTemplateContext) binExtractUint24() (value uint32) {
-	bin, success := context.binExtract(3)
+func (tmplContext *BulkTemplateContext) binExtractUint24() (value uint32) {
+	bin, success := tmplContext.binExtract(3)
 	if !success {
 		return
 	}
@@ -223,8 +237,8 @@ func (context *BulkTemplateContext) binExtractUint24() (value uint32) {
 	return value
 }
 
-func (context *BulkTemplateContext) binExtractInt32() (value int32) {
-	bin, success := context.binExtract(4)
+func (tmplContext *BulkTemplateContext) binExtractInt32() (value int32) {
+	bin, success := tmplContext.binExtract(4)
 	if !success {
 		return
 	}
@@ -235,8 +249,8 @@ func (context *BulkTemplateContext) binExtractInt32() (value int32) {
 	return value
 }
 
-func (context *BulkTemplateContext) binExtractUint32() (value uint32) {
-	bin, success := context.binExtract(4)
+func (tmplContext *BulkTemplateContext) binExtractUint32() (value uint32) {
+	bin, success := tmplContext.binExtract(4)
 	if !success {
 		return
 	}
@@ -247,8 +261,8 @@ func (context *BulkTemplateContext) binExtractUint32() (value uint32) {
 	return value
 }
 
-func (context *BulkTemplateContext) binExtractInt64() (value int64) {
-	bin, success := context.binExtract(8)
+func (tmplContext *BulkTemplateContext) binExtractInt64() (value int64) {
+	bin, success := tmplContext.binExtract(8)
 	if !success {
 		return
 	}
@@ -263,8 +277,8 @@ func (context *BulkTemplateContext) binExtractInt64() (value int64) {
 	return value
 }
 
-func (context *BulkTemplateContext) binExtractUint64() (value uint64) {
-	bin, success := context.binExtract(8)
+func (tmplContext *BulkTemplateContext) binExtractUint64() (value uint64) {
+	bin, success := tmplContext.binExtract(8)
 	if !success {
 		return
 	}
@@ -279,8 +293,8 @@ func (context *BulkTemplateContext) binExtractUint64() (value uint64) {
 	return value
 }
 
-func (context *BulkTemplateContext) binExtractFloat16() (value float32) {
-	bin, success := context.binExtract(2)
+func (tmplContext *BulkTemplateContext) binExtractFloat16() (value float32) {
+	bin, success := tmplContext.binExtract(2)
 	if !success {
 		return
 	}
@@ -290,8 +304,8 @@ func (context *BulkTemplateContext) binExtractFloat16() (value float32) {
 	return f16.Float32()
 }
 
-func (context *BulkTemplateContext) binExtractFloat32() (value float32) {
-	bin, success := context.binExtract(4)
+func (tmplContext *BulkTemplateContext) binExtractFloat32() (value float32) {
+	bin, success := tmplContext.binExtract(4)
 	if !success {
 		return
 	}
@@ -299,8 +313,8 @@ func (context *BulkTemplateContext) binExtractFloat32() (value float32) {
 	return math.Float32frombits(bits)
 }
 
-func (context *BulkTemplateContext) binExtractFloat64() (value float64) {
-	bin, success := context.binExtract(8)
+func (tmplContext *BulkTemplateContext) binExtractFloat64() (value float64) {
+	bin, success := tmplContext.binExtract(8)
 	if !success {
 		return
 	}
@@ -308,29 +322,29 @@ func (context *BulkTemplateContext) binExtractFloat64() (value float64) {
 	return math.Float64frombits(bits)
 }
 
-func (context *BulkTemplateContext) binExtractBytes(n int) (value []byte) {
-	bin, success := context.binExtract(n)
+func (tmplContext *BulkTemplateContext) binExtractBytes(n int) (value []byte) {
+	bin, success := tmplContext.binExtract(n)
 	if !success {
 		return
 	}
 	return bin
 }
 
-func (context *BulkTemplateContext) binExtractString(maxlen int) (value string) {
+func (tmplContext *BulkTemplateContext) binExtractString(maxlen int) (value string) {
 	var strbytes []byte
-	if context.NoteFormat == BulkNoteFormatOriginal {
+	if tmplContext.NoteFormat == BulkNoteFormatOriginal {
 		for i := 0; i < maxlen; i++ {
-			b := byte(context.binExtractUint8())
+			b := byte(tmplContext.binExtractUint8())
 			if b != 0 {
 				strbytes = append(strbytes, b)
 			}
 		}
-	} else if context.NoteFormat == BulkNoteFormatFlexNano {
-		stringLen := context.binExtractUint8()
-		strbytes = context.binExtractBytes(int(stringLen))
+	} else if tmplContext.NoteFormat == BulkNoteFormatFlexNano {
+		stringLen := tmplContext.binExtractUint8()
+		strbytes = tmplContext.binExtractBytes(int(stringLen))
 	} else {
-		stringLen := context.binExtractUint16()
-		strbytes = context.binExtractBytes(int(stringLen))
+		stringLen := tmplContext.binExtractUint16()
+		strbytes = tmplContext.binExtractBytes(int(stringLen))
 	}
 	// Escape any quotes in the string
 	value = strings.TrimSuffix(strings.TrimPrefix(strconv.Quote(string(strbytes)), "\""), "\"")
@@ -339,47 +353,47 @@ func (context *BulkTemplateContext) binExtractString(maxlen int) (value string) 
 
 // BulkDecodeNextEntry extract a JSON object from the binary.  Note that both 'when' and 'wherewhen'
 // returned in standard unix epoch seconds (not in nanoseconds)
-func (context *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]interface{}, payload []byte, when int64, where int64, wherewhen int64, olc string, noteID string, success bool) {
+func (tmplContext *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]interface{}, payload []byte, when int64, wherewhen int64, olc string, noteID string, success bool) {
 
 	// Exit if nothing left
-	if context.BinLen == 0 {
+	if tmplContext.BinLen == 0 {
 		if debugBin {
-			logDebug("bulk: nothing left")
+			logDebug(context.Background(), "bulk: nothing left")
 		}
 		return
 	}
 
 	// Trace
 	if debugBin {
-		logDebug("%x", context.Bin)
+		logDebug(context.Background(), "%x", tmplContext.Bin)
 	}
 
 	// Plug the noteID into the context for later substitution
-	context.noteID = noteID
+	tmplContext.noteID = noteID
 
 	// Extract the bin header, and process the variable-length area
 	noOmitEmpty := false
 	var flags uint64
-	if context.NoteFormat == BulkNoteFormatOriginal {
+	if tmplContext.NoteFormat == BulkNoteFormatOriginal {
 
 		// If there was a payload, extract it
-		if context.ORIGTemplatePayloadLen != 0 {
-			context.BinOffset = context.ORIGTemplatePayloadOffset
-			payload = context.binExtractBytes(context.ORIGTemplatePayloadLen)
+		if tmplContext.ORIGTemplatePayloadLen != 0 {
+			tmplContext.BinOffset = tmplContext.ORIGTemplatePayloadOffset
+			payload = tmplContext.binExtractBytes(tmplContext.ORIGTemplatePayloadLen)
 		}
 
 		// If there were flags, extract them
-		if context.ORIGTemplateFlagsOffset != 0 {
-			context.BinOffset = context.ORIGTemplateFlagsOffset
-			flags = context.binExtractUint64()
+		if tmplContext.ORIGTemplateFlagsOffset != 0 {
+			tmplContext.BinOffset = tmplContext.ORIGTemplateFlagsOffset
+			flags = tmplContext.binExtractUint64()
 		}
 
 	} else {
 
 		// Extract the header and variable-length area position
-		context.BinOffset = 0
-		binHeader := context.binExtractUint8()
-		context.BinOffset = int(context.binExtractUint16())
+		tmplContext.BinOffset = 0
+		binHeader := tmplContext.binExtractUint8()
+		tmplContext.BinOffset = int(tmplContext.binExtractUint16())
 
 		// Extract the No OmitEmpty flag
 		noOmitEmpty = (binHeader & bulkflagNoOmitEmpty) != 0
@@ -388,78 +402,81 @@ func (context *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]inter
 		payloadLen := 0
 		switch binHeader & (bulkflagPayloadL | bulkflagPayloadH) {
 		case bulkflagPayloadL:
-			payloadLen = int(context.binExtractUint8())
+			payloadLen = int(tmplContext.binExtractUint8())
 		case bulkflagPayloadH:
-			payloadLen = int(context.binExtractUint16())
+			payloadLen = int(tmplContext.binExtractUint16())
 		case bulkflagPayloadH | bulkflagPayloadL:
-			payloadLen = int(context.binExtractUint32())
+			payloadLen = int(tmplContext.binExtractUint32())
 		}
-		payload = context.binExtractBytes(payloadLen)
+		payload = tmplContext.binExtractBytes(payloadLen)
 
 		// Extract flags length, and skip by the flags
 		switch binHeader & (bulkflagFlagsL | bulkflagFlagsH) {
 		case bulkflagFlagsL:
-			flags = uint64(context.binExtractUint8())
+			flags = uint64(tmplContext.binExtractUint8())
 		case bulkflagFlagsH:
-			flags = uint64(context.binExtractUint16())
+			flags = uint64(tmplContext.binExtractUint16())
 		case bulkflagFlagsH | bulkflagFlagsL:
-			flags = context.binExtractUint64()
+			flags = tmplContext.binExtractUint64()
 		}
 
 		// Extract OLC, and skip by it
 		olcLen := 0
 		switch binHeader & (bulkflagOLCL | bulkflagOLCH) {
 		case bulkflagOLCL:
-			olcLen = int(context.binExtractUint8())
+			olcLen = int(tmplContext.binExtractUint8())
 		case bulkflagOLCH:
-			olcLen = int(context.binExtractUint16())
+			olcLen = int(tmplContext.binExtractUint16())
 		case bulkflagOLCH | bulkflagOLCL:
-			olcLen = int(context.binExtractUint32())
+			olcLen = int(tmplContext.binExtractUint32())
 		}
-		olc = string(context.binExtractBytes(olcLen))
+		olc = string(tmplContext.binExtractBytes(olcLen))
 
 	}
 
 	// The position right now is the length of the record
-	binRecLen := context.BinOffset
+	binRecLen := tmplContext.BinOffset
 
 	// Reset to the beginning of the record
-	context.BinOffset = 0
-	if context.NoteFormat != BulkNoteFormatOriginal {
-		context.BinOffset++    // BULKFLAGS header byte
-		context.BinOffset += 2 // Offset to variable length portion
+	tmplContext.BinOffset = 0
+	if tmplContext.NoteFormat != BulkNoteFormatOriginal {
+		tmplContext.BinOffset++    // BULKFLAGS header byte
+		tmplContext.BinOffset += 2 // Offset to variable length portion
 	}
 
 	// All entries begin with these
 	combinedWhen := int64(0)
-	where = 0
-	if context.NoteFormat != BulkNoteFormatFlexNano {
-		combinedWhen = context.binExtractInt64()
-		where = context.binExtractInt64()
-	}
+	if tmplContext.NoteFormat != BulkNoteFormatFlexNano {
+		combinedWhen = tmplContext.binExtractInt64()
+		where := tmplContext.binExtractInt64()
+		if where != 0 {
+			olc = OLCFromINT64(where)
+		}
 
-	// Prior to 2021-08-26, When was stored in nanoseconds, with the low order 1000000000 ALWAYS being 0
-	// because the notecard only measures time on 1-second granularity.  Thus, these bits were squandered.
-	// Starting on the ddate above, we changed the semantics to mean that when the low order 1000000000 is
-	// exactly 0, it means that wherewhen is not supplied.  Otherwise, it is the number of seconds prior
-	// to "when" that represents the time when the location was measured, offset by 1.  Please refer to
-	// the notecard repo src/app/json.c to see the code that encodes this field.
-	when = int64((uint64(combinedWhen) / 1000000000))
-	relativeWhereWhenOffsetSecs := int64(uint64(combinedWhen) % 1000000000)
-	if when > 0 && relativeWhereWhenOffsetSecs > 0 {
-		wherewhen = when - (relativeWhereWhenOffsetSecs - 1)
+		// Prior to 2021-08-26, When was stored in nanoseconds, with the low order 1000000000 ALWAYS being 0
+		// because the notecard only measures time on 1-second granularity.  Thus, these bits were squandered.
+		// Starting on the ddate above, we changed the semantics to mean that when the low order 1000000000 is
+		// exactly 0, it means that wherewhen is not supplied.  Otherwise, it is the number of seconds prior
+		// to "when" that represents the time when the location was measured, offset by 1.  Please refer to
+		// the notecard repo src/app/json.c to see the code that encodes this field.
+		when = int64((uint64(combinedWhen) / 1000000000))
+		relativeWhereWhenOffsetSecs := int64(uint64(combinedWhen) % 1000000000)
+		if when > 0 && relativeWhereWhenOffsetSecs > 0 {
+			wherewhen = when - (relativeWhereWhenOffsetSecs - 1)
+		}
+
 	}
 
 	// Generate an output body JSON string from the input, without even paying any attention at all
 	// to the JSON hierarchy, arrays, or whatnot.
 	bodyJSON := ""
 
-	jsonReader := strings.NewReader(context.Template)
+	jsonReader := strings.NewReader(tmplContext.Template)
 	dec := jsonxt.NewDecoder(jsonReader)
 	dec.UseNumber()
 	for {
 		if debugJSONBin {
-			logDebug("%d:\n  %s", context.BinOffset, bodyJSON)
+			logDebug(context.Background(), "%d:\n  %s", tmplContext.BinOffset, bodyJSON)
 		}
 		t, err := dec.Token()
 		if err == io.EOF {
@@ -482,7 +499,7 @@ func (context *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]inter
 				if err2 == nil && i > 0 {
 					strLen = i
 				}
-				bodyJSON += "\"" + context.binExtractString(strLen) + "\""
+				bodyJSON += "\"" + tmplContext.binExtractString(strLen) + "\""
 			}
 		case jsonxt.Number:
 			numberType, errInt := tt.Int64()
@@ -490,27 +507,27 @@ func (context *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]inter
 				// Integer
 				switch numberType {
 				case 11:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractInt8())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractInt8())
 				case 12:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractInt16())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractInt16())
 				case 13:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractInt24())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractInt24())
 				case 21:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractUint8())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractUint8())
 				case 22:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractUint16())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractUint16())
 				case 23:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractUint24())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractUint24())
 				case 1:
 					fallthrough
 				case 14:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractInt32())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractInt32())
 				case 18:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractInt64())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractInt64())
 				case 24:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractUint32())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractUint32())
 				case 28:
-					bodyJSON += fmt.Sprintf("%d", context.binExtractUint64())
+					bodyJSON += fmt.Sprintf("%d", tmplContext.binExtractUint64())
 				default:
 					bodyJSON += "0"
 				}
@@ -521,11 +538,11 @@ func (context *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]inter
 				} else {
 					// Real
 					if isPointOne(numberType, 12) {
-						bodyJSON += fmt.Sprintf("%g", context.binExtractFloat16())
+						bodyJSON += fmt.Sprintf("%g", tmplContext.binExtractFloat16())
 					} else if isPointOne(numberType, 14) {
-						bodyJSON += fmt.Sprintf("%g", context.binExtractFloat32())
+						bodyJSON += fmt.Sprintf("%g", tmplContext.binExtractFloat32())
 					} else if isPointOne(numberType, 18) || isPointOne(numberType, 1) {
-						bodyJSON += fmt.Sprintf("%g", context.binExtractFloat64())
+						bodyJSON += fmt.Sprintf("%g", tmplContext.binExtractFloat64())
 					} else {
 						bodyJSON += "0"
 					}
@@ -592,8 +609,8 @@ func (context *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]inter
 	}
 
 	// Exit if we'd encountered underrun
-	if context.BinUnderrun {
-		logDebug("bin: bin underrun")
+	if tmplContext.BinUnderrun {
+		logDebug(context.Background(), "bin: bin underrun")
 		return
 	}
 
@@ -601,17 +618,17 @@ func (context *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]inter
 	// no variable OLC buffer area following the binary record.  In this case, the actual
 	// record length is the current position after parsing the data.
 	if binRecLen == 0 {
-		binRecLen = context.BinOffset
+		binRecLen = tmplContext.BinOffset
 	}
 
 	// Advance the context to the next entry
 	success = true
-	context.Bin = context.Bin[binRecLen:]
-	context.BinLen = len(context.Bin)
+	tmplContext.Bin = tmplContext.Bin[binRecLen:]
+	tmplContext.BinLen = len(tmplContext.Bin)
 
 	// Trace
 	if debugBin {
-		logDebug("bin: done with %d-byte record (%d bytes remaining)", binRecLen, context.BinLen)
+		logDebug(context.Background(), "bin: done with %d-byte record (%d bytes remaining)", binRecLen, tmplContext.BinLen)
 	}
 
 	// Done
@@ -656,13 +673,13 @@ func omitempty(in map[string]interface{}) (out map[string]interface{}) {
 
 // In the case of the ORIG format, get parameters about bin records from the template
 // because in that format the bin records were not yet self-describing.
-func parseORIGTemplate(context *BulkTemplateContext) (err error) {
+func parseORIGTemplate(tmplContext *BulkTemplateContext) (err error) {
 	// All templates begin with time and location
 	binLength := 0
 	binLength += 8 // time
 	binLength += 8 // location
 
-	jsonReader := strings.NewReader(context.Template)
+	jsonReader := strings.NewReader(tmplContext.Template)
 	dec := jsonxt.NewDecoder(jsonReader)
 	dec.UseNumber()
 	boolPresent := false
@@ -680,12 +697,12 @@ func parseORIGTemplate(context *BulkTemplateContext) (err error) {
 		switch tt := t.(type) {
 		case jsonxt.Delim:
 			if debugJSONBin {
-				logDebug("TEMPLATE DELIM %s", fmt.Sprintf("%v", t))
+				logDebug(context.Background(), "TEMPLATE DELIM %s", fmt.Sprintf("%v", t))
 			}
 		case string:
 			str := fmt.Sprintf("%s", t)
 			if debugJSONBin {
-				logDebug("TEMPLATE string %s", str)
+				logDebug(context.Background(), "TEMPLATE string %s", str)
 			}
 			if !strings.HasPrefix(str, "\"") {
 				i, err2 := strconv.Atoi(str)
@@ -697,7 +714,7 @@ func parseORIGTemplate(context *BulkTemplateContext) (err error) {
 			}
 		case jsonxt.Number:
 			if debugJSONBin {
-				logDebug("TEMPLATE number")
+				logDebug(context.Background(), "TEMPLATE number")
 			}
 			numberType, errInt := tt.Int64()
 			if errInt == nil {
@@ -737,7 +754,7 @@ func parseORIGTemplate(context *BulkTemplateContext) (err error) {
 			}
 		case bool:
 			if debugJSONBin {
-				logDebug("TEMPLATE bool")
+				logDebug(context.Background(), "TEMPLATE bool")
 			}
 			boolPresent = true
 		}
@@ -748,12 +765,12 @@ func parseORIGTemplate(context *BulkTemplateContext) (err error) {
 	}
 
 	// Payload
-	context.ORIGTemplatePayloadOffset = binLength
-	binLength += context.ORIGTemplatePayloadLen
+	tmplContext.ORIGTemplatePayloadOffset = binLength
+	binLength += tmplContext.ORIGTemplatePayloadLen
 
 	// Flags
 	if boolPresent {
-		context.ORIGTemplateFlagsOffset = binLength
+		tmplContext.ORIGTemplateFlagsOffset = binLength
 		binLength += flagsLength //nolint ignore 'ineffectual assignment to binLength' since we may use it for future additions to the code
 	}
 
@@ -795,16 +812,19 @@ func BulkEncodeTemplate(templateBodyJSON []byte) (context BulkTemplateContext, e
 //	If BULKFLAGS indicates it is present, [payloadLen] [payload]
 //	If BULKFLAGS indicates it is present, [flagsLen] [flags]
 //	If BULKFLAGS indicates it is present, [olclen] [olc]
-func (context *BulkTemplateContext) BulkEncodeNextEntry(body map[string]interface{}, payload []byte, when int64, wherewhen int64, currentLocOLC string, noteID string, noOmitEmpty bool) (output []byte, err error) {
+func (tmplContext *BulkTemplateContext) BulkEncodeNextEntry(body map[string]interface{}, payload []byte, when int64, wherewhen int64, currentLocOLC string, noteID string, noOmitEmpty bool) (output []byte, err error) {
 
 	// If the OLC can be converted to an int64, do so.
 	currentLocOLC64 := OLCToINT64(currentLocOLC)
 
 	// Exit if the payload is simply too large
-	if context.NoteFormat == BulkNoteFormatOriginal {
+	if tmplContext.NoteFormat == BulkNoteFormatOriginal {
 		err = fmt.Errorf("format not supported")
 		return
 	}
+
+	// Plug the noteID into the context for later substitution
+	tmplContext.noteID = noteID
 
 	// Prior to 2021-08-26, When was stored in nanoseconds, with the low order 1000000000 ALWAYS being 0.
 	// Starting on that date, we changed the semantics to mean that the low order 1000000000 is 0, then
@@ -827,18 +847,18 @@ func (context *BulkTemplateContext) BulkEncodeNextEntry(body map[string]interfac
 		binHeader = bulkflagNoOmitEmpty
 	}
 	variableLengthOffset := uint16(0)
-	err = context.binAppendUint8(binHeader) // BULKFLAGS
+	err = tmplContext.binAppendUint8(binHeader) // BULKFLAGS
 	if err == nil {
-		err = context.binAppendUint16(variableLengthOffset)
+		err = tmplContext.binAppendUint16(variableLengthOffset)
 	}
 
 	// Append the time and location so long as we're not operating in nano mode
-	if context.NoteFormat != BulkNoteFormatFlexNano {
+	if tmplContext.NoteFormat != BulkNoteFormatFlexNano {
 		if err == nil {
-			err = context.binAppendUint64(combinedWhen)
+			err = tmplContext.binAppendUint64(combinedWhen)
 		}
 		if err == nil {
-			context.binAppendInt64(currentLocOLC64)
+			tmplContext.binAppendInt64(currentLocOLC64)
 		}
 	}
 	if err != nil {
@@ -848,7 +868,7 @@ func (context *BulkTemplateContext) BulkEncodeNextEntry(body map[string]interfac
 	// Parse the template
 	var p fastjson.Parser
 	var template *fastjson.Value
-	template, err = p.Parse(context.Template)
+	template, err = p.Parse(tmplContext.Template)
 	if err != nil {
 		err = fmt.Errorf("bulk: parse error: %s", err)
 		return
@@ -861,50 +881,52 @@ func (context *BulkTemplateContext) BulkEncodeNextEntry(body map[string]interfac
 		err = fmt.Errorf("bulk: template error: %s", err)
 		return
 	}
-	err = context.walkObjectInto(0, to, body)
-	if err != nil {
-		err = fmt.Errorf("bulk: %s", err)
-		return
+	if body != nil {
+		err = tmplContext.walkObjectInto(0, to, body)
+		if err != nil {
+			err = fmt.Errorf("bulk: %s", err)
+			return
+		}
 	}
 
 	// Remember the beginning of the variable-length data because
 	// on all versions, the payload begins just after the records.
-	variableLengthOffset = uint16(len(context.Bin))
+	variableLengthOffset = uint16(len(tmplContext.Bin))
 
 	// Append the payload
 	payloadLength := uint32(len(payload))
 	if payloadLength > 0 {
 		if payloadLength < 256 {
 			binHeader |= bulkflagPayloadL
-			err = context.binAppendUint8(uint8(payloadLength))
+			err = tmplContext.binAppendUint8(uint8(payloadLength))
 		} else if payloadLength < 65536 {
 			binHeader |= bulkflagPayloadH
-			err = context.binAppendInt16(int16(payloadLength))
+			err = tmplContext.binAppendInt16(int16(payloadLength))
 		} else {
 			binHeader |= bulkflagPayloadL | bulkflagPayloadH
-			err = context.binAppendInt32(int32(payloadLength))
+			err = tmplContext.binAppendInt32(int32(payloadLength))
 		}
 		if err == nil {
-			err = context.binAppendUint8s(payload, payloadLength)
+			err = tmplContext.binAppendUint8s(payload, payloadLength)
 		}
 	} else {
-		err = context.binAppendUint8s(payload, payloadLength)
+		err = tmplContext.binAppendUint8s(payload, payloadLength)
 	}
 	if err != nil {
 		return
 	}
 
 	// Append the flags if they're present
-	if context.binFlagsFound > 0 {
-		if context.binFlagsFound <= 8 {
+	if tmplContext.binFlagsFound > 0 {
+		if tmplContext.binFlagsFound <= 8 {
 			binHeader |= bulkflagFlagsL
-			err = context.binAppendUint8(uint8(context.binFlags))
-		} else if context.binFlagsFound <= 16 {
+			err = tmplContext.binAppendUint8(uint8(tmplContext.binFlags))
+		} else if tmplContext.binFlagsFound <= 16 {
 			binHeader |= bulkflagFlagsH
-			err = context.binAppendInt16(int16(context.binFlags))
+			err = tmplContext.binAppendInt16(int16(tmplContext.binFlags))
 		} else {
 			binHeader |= bulkflagFlagsL | bulkflagFlagsH
-			err = context.binAppendUint64(context.binFlags)
+			err = tmplContext.binAppendUint64(tmplContext.binFlags)
 		}
 		if err != nil {
 			return
@@ -912,26 +934,26 @@ func (context *BulkTemplateContext) BulkEncodeNextEntry(body map[string]interfac
 	}
 
 	// Append OLC if it wasn't able to be converted
-	if context.NoteFormat != BulkNoteFormatFlexNano && currentLocOLC64 < 0 {
+	if tmplContext.NoteFormat != BulkNoteFormatFlexNano && currentLocOLC64 < 0 {
 		olclen := uint32(len(currentLocOLC))
 		if olclen > 0 {
 			if olclen < 256 {
 				binHeader |= bulkflagOLCL
-				err = context.binAppendUint8(uint8(olclen))
+				err = tmplContext.binAppendUint8(uint8(olclen))
 				if err == nil {
-					err = context.binAppendUint8s([]uint8(currentLocOLC), olclen)
+					err = tmplContext.binAppendUint8s([]uint8(currentLocOLC), olclen)
 				}
 			} else if olclen < 65536 {
 				binHeader |= bulkflagOLCH
-				err = context.binAppendInt16(int16(olclen))
+				err = tmplContext.binAppendInt16(int16(olclen))
 				if err == nil {
-					err = context.binAppendUint8s([]uint8(currentLocOLC), olclen)
+					err = tmplContext.binAppendUint8s([]uint8(currentLocOLC), olclen)
 				}
 			} else {
 				binHeader |= bulkflagOLCL | bulkflagOLCH
-				err = context.binAppendInt32(int32(olclen))
+				err = tmplContext.binAppendInt32(int32(olclen))
 				if err == nil {
-					err = context.binAppendUint8s([]uint8(currentLocOLC), olclen)
+					err = tmplContext.binAppendUint8s([]uint8(currentLocOLC), olclen)
 				}
 			}
 		}
@@ -941,317 +963,351 @@ func (context *BulkTemplateContext) BulkEncodeNextEntry(body map[string]interfac
 	}
 
 	// Re-insert the header byte and variableLengthOffset where it belongs
-	if len(context.Bin) >= 3 {
-		context.Bin[0] = binHeader
-		context.Bin[1] = byte(variableLengthOffset & 0x0ff)
-		context.Bin[2] = byte((variableLengthOffset >> 8) & 0x0ff)
+	if len(tmplContext.Bin) >= 3 {
+		tmplContext.Bin[0] = binHeader
+		tmplContext.Bin[1] = byte(variableLengthOffset & 0x0ff)
+		tmplContext.Bin[2] = byte((variableLengthOffset >> 8) & 0x0ff)
 	}
 
 	// Done
-	output = context.Bin
+	output = tmplContext.Bin
 	return
 
 }
 
-func (context *BulkTemplateContext) binAppendBool(value bool) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendBool(value bool) (err error) {
 	if debugEncoding {
-		logDebug("%d  BOOL = %v\n", context.binDepth, value)
+		logDebug(context.Background(), "append %d  BOOL = %v\n", tmplContext.binDepth, value)
 	}
-	if context.binFlagsFound >= maxBinFlags {
+	if tmplContext.binFlagsFound >= maxBinFlags {
 		return fmt.Errorf("too may flag fields in template (%d max)", maxBinFlags)
 	}
 	// The flags are stored least significant bit to highest
 	if value {
-		context.binFlags |= 1 << context.binFlagsFound
+		tmplContext.binFlags |= 1 << tmplContext.binFlagsFound
 	}
-	context.binFlagsFound++
+	tmplContext.binFlagsFound++
 	return nil
 }
 
-func (context *BulkTemplateContext) binAppendUint8(databyte uint8) (err error) {
-	context.Bin = append(context.Bin, byte(databyte))
+func (tmplContext *BulkTemplateContext) binAppendUint8(databyte uint8) (err error) {
+	tmplContext.Bin = append(tmplContext.Bin, byte(databyte))
 	return nil
 }
 
-func (context *BulkTemplateContext) binAppendInt8(value int8) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendInt8(value int8) (err error) {
 	if debugEncoding {
-		logDebug("%d  INT8 = %d\n", context.binDepth, value)
+		logDebug(context.Background(), "append %d  INT8 = %d", tmplContext.binDepth, value)
 	}
-	return context.binAppendUint8(uint8(value))
+	return tmplContext.binAppendUint8(uint8(value))
 }
 
-func (context *BulkTemplateContext) binAppendInt16(value int16) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendInt16(value int16) (err error) {
 	if debugEncoding {
-		logDebug("%d  INT16 = %d\n", context.binDepth, value)
+		logDebug(context.Background(), "append %d  INT16 = %d", tmplContext.binDepth, value)
 	}
-	err = context.binAppendUint8(uint8(value & 0xff))
+	err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	return err
 }
-func (context *BulkTemplateContext) binAppendUint16(value uint16) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendUint16(value uint16) (err error) {
 	if debugEncoding {
-		logDebug("%d  UINT16 = %d\n", context.binDepth, value)
+		logDebug(context.Background(), "append %d  UINT16 = %d", tmplContext.binDepth, value)
 	}
-	err = context.binAppendUint8(uint8(value & 0xff))
+	err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
-	}
-	return err
-}
-
-func (context *BulkTemplateContext) binAppendInt24(value int32) (err error) {
-	if debugEncoding {
-		logDebug("%d  INT24 = %d\n", context.binDepth, value)
-	}
-	err = context.binAppendUint8(uint8(value & 0xff))
-	value = value >> 8
-	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
-	}
-	value = value >> 8
-	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	return err
 }
 
-func (context *BulkTemplateContext) binAppendUint24(value uint32) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendInt24(value int32) (err error) {
 	if debugEncoding {
-		logDebug("%d  UINT24 = %d\n", context.binDepth, value)
+		logDebug(context.Background(), "append %d  INT24 = %d", tmplContext.binDepth, value)
 	}
-	err = context.binAppendUint8(uint8(value & 0xff))
+	err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	return err
 }
 
-func (context *BulkTemplateContext) binAppendInt32(value int32) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendUint24(value uint32) (err error) {
 	if debugEncoding {
-		logDebug("%d  INT32 = %d\n", context.binDepth, value)
+		logDebug(context.Background(), "append %d  UINT24 = %d", tmplContext.binDepth, value)
 	}
-	err = context.binAppendUint8(uint8(value & 0xff))
+	err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
-	}
-	value = value >> 8
-	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	return err
 }
 
-func (context *BulkTemplateContext) binAppendUint32(value uint32) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendInt32(value int32) (err error) {
 	if debugEncoding {
-		logDebug("%d  UINT32 = %d\n", context.binDepth, value)
+		logDebug(context.Background(), "append %d  INT32 = %d", tmplContext.binDepth, value)
 	}
-	err = context.binAppendUint8(uint8(value & 0xff))
+	err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
-	}
-	value = value >> 8
-	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	}
+	value = value >> 8
+	if err == nil {
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	return err
 }
 
-func (context *BulkTemplateContext) binAppendInt64(value int64) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendUint32(value uint32) (err error) {
 	if debugEncoding {
-		logDebug("%d  INT64 = %d\n", context.binDepth, value)
+		logDebug(context.Background(), "append %d  UINT32 = %d", tmplContext.binDepth, value)
 	}
-	err = context.binAppendUint8(uint8(value & 0xff))
+	err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
-	}
-	value = value >> 8
-	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
-	}
-	value = value >> 8
-	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
-	}
-	value = value >> 8
-	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
-	}
-	value = value >> 8
-	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	return err
 }
 
-func (context *BulkTemplateContext) binAppendUint64(value uint64) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendInt64(value int64) (err error) {
 	if debugEncoding {
-		logDebug("%d  UINT64 = %d\n", context.binDepth, value)
+		logDebug(context.Background(), "append %d  INT64 = %d", tmplContext.binDepth, value)
 	}
-	err = context.binAppendUint8(uint8(value & 0xff))
+	err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
-	}
-	value = value >> 8
-	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	}
+	value = value >> 8
+	if err == nil {
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	return err
 }
 
-func (context *BulkTemplateContext) binAppendUint8s(data []uint8, templateLen uint32) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendUint64(value uint64) (err error) {
 	if debugEncoding {
-		logDebug("%d  BYTES(%d bytes)\n", context.binDepth, templateLen)
+		logDebug(context.Background(), "append %d  UINT64 = %d", tmplContext.binDepth, value)
+	}
+	err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	value = value >> 8
+	if err == nil {
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	}
+	value = value >> 8
+	if err == nil {
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	}
+	value = value >> 8
+	if err == nil {
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	}
+	value = value >> 8
+	if err == nil {
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	}
+	value = value >> 8
+	if err == nil {
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	}
+	value = value >> 8
+	if err == nil {
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	}
+	value = value >> 8
+	if err == nil {
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
+	}
+	return err
+}
+
+func (tmplContext *BulkTemplateContext) binAppendUint8s(data []uint8, templateLen uint32) (err error) {
+	if debugEncoding {
+		logDebug(context.Background(), "append %d  BYTES(%d bytes)", tmplContext.binDepth, templateLen)
 	}
 	datalen := uint32(len(data))
 	for i := uint32(0); err == nil && i < templateLen; i++ {
 		if i < datalen {
-			err = context.binAppendUint8(data[i])
+			err = tmplContext.binAppendUint8(data[i])
 		} else {
-			err = context.binAppendUint8(0)
+			err = tmplContext.binAppendUint8(0)
 		}
 	}
 	return err
 }
 
-func (context *BulkTemplateContext) binAppendString(p string) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendString(p string) (err error) {
 	if debugEncoding {
-		logDebug("%d  STRING = %s\n", context.binDepth, p)
+		logDebug(context.Background(), "append %d  STRING = %s", tmplContext.binDepth, p)
 	}
 	actualLen := uint32(len(p))
-	if context.NoteFormat == BulkNoteFormatFlexNano {
-		err = context.binAppendUint8(uint8(actualLen))
+	if tmplContext.NoteFormat == BulkNoteFormatFlexNano {
+		err = tmplContext.binAppendUint8(uint8(actualLen))
 		if err == nil {
-			err = context.binAppendUint8s([]uint8(p), actualLen)
+			err = tmplContext.binAppendUint8s([]uint8(p), actualLen)
 		}
 	} else {
-		err = context.binAppendUint16(uint16(actualLen))
+		err = tmplContext.binAppendUint16(uint16(actualLen))
 		if err == nil {
-			err = context.binAppendUint8s([]uint8(p), actualLen)
+			err = tmplContext.binAppendUint8s([]uint8(p), actualLen)
 		}
 	}
 	return err
 }
 
-func (context *BulkTemplateContext) binAppendReal16(number float32) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendReal16(number float32) (err error) {
 	if debugEncoding {
-		logDebug("%d  REAL16 = %f\n", context.binDepth, number)
+		logDebug(context.Background(), "append %d  REAL16 = %f", tmplContext.binDepth, number)
 	}
-	value := Float16(number)
-	err = context.binAppendUint8(uint8(value & 0xff))
+	value := Fromfloat32(number)
+	err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	value = value >> 8
 	if err == nil {
-		err = context.binAppendUint8(uint8(value & 0xff))
+		err = tmplContext.binAppendUint8(uint8(value & 0xff))
 	}
 	return err
 }
 
-func (context *BulkTemplateContext) binAppendReal32(number float32) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendReal32(number float32) (err error) {
 	if debugEncoding {
-		logDebug("%d  REAL32 = %f\n", context.binDepth, number)
+		logDebug(context.Background(), "(appending %d REAL32 = %f as float32)", tmplContext.binDepth, number)
 	}
-	return context.binAppendUint32(math.Float32bits(number))
+	return tmplContext.binAppendUint32(math.Float32bits(number))
 }
 
-func (context *BulkTemplateContext) binAppendReal64(number float64) (err error) {
+func (tmplContext *BulkTemplateContext) binAppendReal64(number float64) (err error) {
 	if debugEncoding {
-		logDebug("%d  REAL64 = %f\n", context.binDepth, float32(number))
+		logDebug(context.Background(), "(appending %d REAL64 = %f as float64)", tmplContext.binDepth, float32(number))
 	}
-	return context.binAppendUint64(math.Float64bits(number))
+	return tmplContext.binAppendUint64(math.Float64bits(number))
 }
 
 // Get a value
-func (context *BulkTemplateContext) processTemplateValue(level int, v *fastjson.Value, do map[string]interface{}, dok string, dov interface{}) (err error) {
+func (tmplContext *BulkTemplateContext) processTemplateValue(level int, v *fastjson.Value, do map[string]interface{}, dok string, dov interface{}) (err error) {
 
-	beforeLen := len(context.Bin)
+	if debugEncoding {
+		fmt.Printf("%sprocessTemplateValue %s\n", strings.Repeat("  ", level), dok)
+	}
+	beforeLen := len(tmplContext.Bin)
 
 	switch v.Type() {
 
 	case fastjson.TypeTrue:
 		var dv bool
+
+		if debugEncoding {
+			// Needed this printf to discover numeric type = json.Number
+			fmt.Printf("%s type %T\n", dok, dov)
+		}
+
 		s, isString := dov.(string)
-		if isString {
-			i, _ := strconv.Atoi(s)
-			if s == "true" || i == 1 {
+		b, isBool := dov.(bool)
+		i, isInt := dov.(int)
+		// Numeric values unmarshalled into json.Number
+		n, isNumber := dov.(json.Number)
+
+		if isBool {
+			dv = b
+		} else if isString {
+			if s == "true" {
 				dv = true
 			} else {
-				dv = false
+				i, err := strconv.Atoi(s)
+				if err == nil && i > 0 {
+					dv = true
+				}
+			}
+		} else if isInt {
+			dv = (i > 0)
+		} else if isNumber {
+			i, err := n.Int64()
+			if err == nil {
+				dv = (i > 0)
 			}
 		}
-		dv, testOk := dov.(bool)
-		if dov != nil && testOk {
-			dv = true
-		}
+
 		if debugEncoding {
-			fmt.Printf("EMIT BOOL %t\n", dv)
+			fmt.Printf("%sEMIT BOOL %t\n", strings.Repeat("  ", level), dv)
 		}
-		err = context.binAppendBool(dv)
+		err = tmplContext.binAppendBool(dv)
 
 	case fastjson.TypeString:
 		newStringBytes, _ := v.StringBytes()
 		format := string(newStringBytes)
 		var dv string
 		dv, _ = dov.(string)
-		if dov != nil && dok == "_note" {
-			dv = context.noteID
+		if dok == "_note" {
+			dv = tmplContext.noteID
 		}
 		if debugEncoding {
-			fmt.Printf("EMIT STRING %s format %s\n", dv, format)
+			fmt.Printf("%sEMIT STRING %s format %s\n", strings.Repeat("  ", level), dv, format)
 		}
-		err = context.binAppendString(dv)
+		err = tmplContext.binAppendString(dv)
 
 	case fastjson.TypeNumber:
 		format := v.GetFloat64()
 		s, isString := dov.(string)
+		var isInt bool
+		var ivalue int64
 		if isString {
+			// We do auto-coercision of strings to numbers so that we can parse
+			// values in environment variables for _env.dbi
+			// In Go playground it was found that ParseInt returns an error if
+			// it encounters a decimal point, so if there is no error we use its
+			// returned integer value in preference to casting the fvalue, since
+			// float64 cannot encode the entire range of int64 integers.
+			ivalue, err = strconv.ParseInt(s, 10, 64)
+			if err == nil {
+				isInt = true
+			}
 			f64, err := strconv.ParseFloat(s, 64)
 			if err != nil {
 				dov = 0
@@ -1259,71 +1315,89 @@ func (context *BulkTemplateContext) processTemplateValue(level int, v *fastjson.
 				dov = f64
 			}
 		}
-		value, isFloat := dov.(float64)
+		fvalue, _ := dov.(float64)
+		if !isInt {
+			ivalue = int64(fvalue)
+		}
+		_, isJsonNumber := dov.(json.Number)
+		if isJsonNumber {
+			fvalue, _ = dov.(json.Number).Float64()
+			ivalue, err = dov.(json.Number).Int64()
+			if err != nil {
+				if debugEncoding {
+					fmt.Printf("%s(can't extract value as int)\n", strings.Repeat("  ", level))
+				}
+				ivalue = int64(fvalue)
+			}
+		}
 		if dok == "_time" {
-			value = float64(time.Now().UTC().Unix())
+			fvalue = float64(time.Now().UTC().Unix())
+			ivalue = int64(time.Now().UTC().Unix())
 		}
 		if debugEncoding {
-			fmt.Printf("EMIT FLOAT %f format %f\n", value, format)
-			_ = isFloat
+			if isJsonNumber {
+				fmt.Printf("%sEMIT %T %f %d format %f\n", strings.Repeat("  ", level), dov, fvalue, ivalue, format)
+			} else {
+				fmt.Printf("%sEMIT %T %f %d format %f\n", strings.Repeat("  ", level), dov, fvalue, ivalue, format)
+			}
 		}
 		if isPointOne(format, 18) || isPointOne(format, 1) { // 8-byte float64
-			err = context.binAppendReal64(value)
+			err = tmplContext.binAppendReal64(fvalue)
 		} else if isPointOne(format, 14) { // 4-byte float32
-			err = context.binAppendReal32(float32(value))
+			err = tmplContext.binAppendReal32(float32(fvalue))
 		} else if isPointOne(format, 12) { // 2-byte float16
-			err = context.binAppendReal16(float32(value))
+			err = tmplContext.binAppendReal16(float32(fvalue))
 		} else if format == 18 { // 8-byte int
-			err = context.binAppendInt64(int64(value))
+			err = tmplContext.binAppendInt64(int64(ivalue))
 		} else if format == 28 { // 8-byte uint
-			err = context.binAppendUint64(uint64(value))
+			err = tmplContext.binAppendUint64(uint64(ivalue))
 		} else if format == 14 || format == 1 { // 4-byte int
-			if value > 2147483647 || value < -2147483648 {
+			if ivalue > 2147483647 || ivalue < -2147483648 {
 				err = fmt.Errorf("number out of range of 4-byte int")
 			} else {
-				err = context.binAppendInt32(int32(value))
+				err = tmplContext.binAppendInt32(int32(ivalue))
 			}
 		} else if format == 24 { // 4-byte uint
-			if value > 4294967295 || value < 0 {
+			if ivalue > 4294967295 || ivalue < 0 {
 				err = fmt.Errorf("number out of range of 4-byte unsigned int")
 			} else {
-				err = context.binAppendUint32(uint32(value))
+				err = tmplContext.binAppendUint32(uint32(ivalue))
 			}
 		} else if format == 13 { // 3-byte int
-			if value > 8388607 || value < -8388608 {
+			if ivalue > 8388607 || ivalue < -8388608 {
 				err = fmt.Errorf("number out of range of 3-byte int")
 			} else {
-				err = context.binAppendInt24(int32(value))
+				err = tmplContext.binAppendInt24(int32(ivalue))
 			}
 		} else if format == 23 { // 3-byte uint
-			if value > 16777215 || value < 0 {
+			if ivalue > 16777215 || ivalue < 0 {
 				err = fmt.Errorf("number out of range of 3-byte unsigned int")
 			} else {
-				err = context.binAppendUint24(uint32(value))
+				err = tmplContext.binAppendUint24(uint32(ivalue))
 			}
 		} else if format == 12 { // 2-byte int
-			if value > 32767 || value < -32768 {
+			if ivalue > 32767 || ivalue < -32768 {
 				err = fmt.Errorf("number out of range of 2-byte int")
 			} else {
-				err = context.binAppendInt16(int16(value))
+				err = tmplContext.binAppendInt16(int16(ivalue))
 			}
 		} else if format == 22 { // 2-byte uint
-			if value > 65535 || value < 0 {
+			if ivalue > 65535 || ivalue < 0 {
 				err = fmt.Errorf("number out of range of 2-byte unsigned int")
 			} else {
-				err = context.binAppendUint16(uint16(value))
+				err = tmplContext.binAppendUint16(uint16(ivalue))
 			}
 		} else if format == 11 { // 1-byte int
-			if value > 127 || value < -128 {
+			if ivalue > 127 || ivalue < -128 {
 				err = fmt.Errorf("number out of range of 1-byte int")
 			} else {
-				err = context.binAppendInt8(int8(value))
+				err = tmplContext.binAppendInt8(int8(ivalue))
 			}
 		} else if format == 21 { // 1-byte uint
-			if value > 255 || value < 0 {
+			if ivalue > 255 || ivalue < 0 {
 				err = fmt.Errorf("number out of range of 1-byte unsigned int")
 			} else {
-				err = context.binAppendUint8(uint8(value))
+				err = tmplContext.binAppendUint8(uint8(ivalue))
 			}
 		} else {
 			err = fmt.Errorf("unrecognized template field type indicator: %f", format)
@@ -1335,7 +1409,7 @@ func (context *BulkTemplateContext) processTemplateValue(level int, v *fastjson.
 		if dov == nil || !testOk || subObject == nil {
 			return
 		}
-		err = context.walkObjectInto(level, o, subObject)
+		err = tmplContext.walkObjectInto(level, o, subObject)
 
 	case fastjson.TypeArray:
 		a, _ := v.Array()
@@ -1343,18 +1417,21 @@ func (context *BulkTemplateContext) processTemplateValue(level int, v *fastjson.
 		if dov == nil || !testOk || subArray == nil {
 			return
 		}
-		err = context.walkArray(level, a, subArray)
+		err = tmplContext.walkArray(level, a, subArray)
 	}
 
 	if debugEncoding {
-		fmt.Printf("%d bytes appended\n", len(context.Bin)-beforeLen)
+		if err != nil {
+			fmt.Printf("%s^^ %s\n", strings.Repeat("  ", level), err)
+		}
+		fmt.Printf("%s^^ %d bytes appended\n", strings.Repeat("  ", level), len(tmplContext.Bin)-beforeLen)
 	}
 
 	return
 }
 
 // Walk an object array (the only type of array supported)
-func (context *BulkTemplateContext) walkArray(level int, a []*fastjson.Value, da []interface{}) (err error) {
+func (tmplContext *BulkTemplateContext) walkArray(level int, a []*fastjson.Value, da []interface{}) (err error) {
 
 	if a == nil {
 		return
@@ -1373,20 +1450,20 @@ func (context *BulkTemplateContext) walkArray(level int, a []*fastjson.Value, da
 					do = v
 				}
 			}
-			err = context.processTemplateValue(level+1, a[i], do, "", do)
+			err = tmplContext.processTemplateValue(level+1, a[i], do, "", do)
 		}
 	}
 	return
 }
 
 // Decode an object
-func (context *BulkTemplateContext) walkObjectInto(level int, o *fastjson.Object, do map[string]interface{}) (err error) {
+func (tmplContext *BulkTemplateContext) walkObjectInto(level int, o *fastjson.Object, do map[string]interface{}) (err error) {
 	o.Visit(func(k []byte, v *fastjson.Value) {
 		key := string(k)
-		err := context.processTemplateValue(level+1, v, do, key, do[key])
-		if context.binError == nil {
-			context.binError = err
+		err := tmplContext.processTemplateValue(level+1, v, do, key, do[key])
+		if tmplContext.binError == nil {
+			tmplContext.binError = err
 		}
 	})
-	return context.binError
+	return tmplContext.binError
 }

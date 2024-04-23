@@ -22,7 +22,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 
 	// Debug
 	if debugRequest {
-		logDebug(">> %s", string(reqJSON))
+		logDebug(ctx, ">> %s", string(reqJSON))
 	}
 
 	// Unmarshal the incoming request
@@ -31,7 +31,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		rsp.Err = fmt.Sprintf("unknown request: %s", err)
 		rspJSON, _ = note.JSONMarshal(rsp)
 		if debugRequest {
-			logDebug("<< %s", string(rspJSON))
+			logDebug(ctx, "<< %s", string(rspJSON))
 		}
 		return
 	}
@@ -62,7 +62,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			break
 		}
 		for notefileID, notefileInfo := range *req.FileInfo {
-			if !NotefileIDIsReservedWithExceptions(notefileID) {
+			if !NotefileIDIsReservedWithExceptions(notefileID) || req.Allow {
 				err = box.AddNotefile(ctx, notefileID, &notefileInfo)
 				if err != nil && rsp.Err == "" {
 					rsp.Err = fmt.Sprintf("error adding notefile: %s", err)
@@ -83,7 +83,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		}
 		deleteFiles := *req.Files
 		for i := range deleteFiles {
-			if !NotefileIDIsReservedWithExceptions(deleteFiles[i]) {
+			if !NotefileIDIsReservedWithExceptions(deleteFiles[i]) || req.Allow {
 				err = box.DeleteNotefile(ctx, deleteFiles[i])
 				if err != nil && rsp.Err == "" {
 					rsp.Err = fmt.Sprintf("error deleting %s: %s", deleteFiles[i], err)
@@ -112,7 +112,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 
 		}
 		// Make sure that the file exists
-		if NotefileIDIsReservedWithExceptions(req.NotefileID) {
+		if NotefileIDIsReservedWithExceptions(req.NotefileID) && !req.Allow {
 			rsp.Err = "reserved notefile name"
 			break
 		}
@@ -138,17 +138,18 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		}
 		// Add the note
 		xnote := note.Note{}
-		annoteNoteWithWhereWhen(&xnote, req)
+		annotateNoteWithWhereWhen(&xnote, req)
 		if req.Payload != nil {
 			xnote.Payload = *req.Payload
 		}
 		if req.Body != nil {
 			xnote.Body = *req.Body
 		}
-		if req.Allow {
-			err = box.AddNote(ctx, endpointID, req.NotefileID, req.NoteID, xnote)
-		} else {
-			err = box.addNoteLimited(ctx, endpointID, req.NotefileID, req.NoteID, xnote)
+		if !req.Allow {
+			err = box.checkAddNoteLimits(ctx, req.NotefileID, xnote)
+		}
+		if err == nil {
+			err = box.AddNoteWithHistory(ctx, endpointID, req.NotefileID, req.NoteID, xnote)
 		}
 		if err != nil {
 			rsp.Err = fmt.Sprintf("%s", err)
@@ -169,7 +170,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			rsp.Err = "no notefile specified"
 			break
 		}
-		if NotefileIDIsReservedWithExceptions(req.NotefileID) {
+		if NotefileIDIsReservedWithExceptions(req.NotefileID) && !req.Allow {
 			rsp.Err = "reserved notefile name"
 			break
 		}
@@ -192,21 +193,27 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		var xnote note.Note
 		xnote, err = box.GetNote(ctx, req.NotefileID, req.NoteID)
 		if err != nil {
-			annoteNoteWithWhereWhen(&xnote, req)
+			annotateNoteWithWhereWhen(&xnote, req)
 			if req.Payload != nil {
 				xnote.Payload = *req.Payload
 			}
 			if req.Body != nil {
 				xnote.Body = *req.Body
 			}
-			err = box.AddNote(ctx, endpointID, req.NotefileID, req.NoteID, xnote)
+			err = nil
+			if !req.Allow {
+				err = box.checkAddNoteLimits(ctx, req.NotefileID, xnote)
+			}
+			if err == nil {
+				err = box.AddNoteWithHistory(ctx, endpointID, req.NotefileID, req.NoteID, xnote)
+			}
 			if err != nil {
 				rsp.Err = fmt.Sprintf("error adding note: %s", err)
 				break
 			}
 			break
 		}
-		annoteNoteWithWhereWhen(&xnote, req)
+		annotateNoteWithWhereWhen(&xnote, req)
 		if req.Payload != nil {
 			xnote.Payload = *req.Payload
 		} else {
@@ -233,7 +240,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			rsp.Err = "no notefile specified"
 			break
 		}
-		if NotefileIDIsReservedWithExceptions(req.NotefileID) {
+		if NotefileIDIsReservedWithExceptions(req.NotefileID) && !req.Allow {
 			rsp.Err = "reserved notefile name"
 			break
 		}
@@ -601,16 +608,23 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 
 	// Debug
 	if debugRequest {
-		logDebug("<< %s", string(rspJSON))
+		logDebug(ctx, "<< %s", string(rspJSON))
 	}
 
 	// Done
 	return
 }
 
+// Define an invalid time so that we force a history to be added with a 0 time.
+// (see packet.go and elsewhere)
+const InvalidTime = int64(0xffffffff)
+
 // Annotate a note structure with optional location and tower info from a request
-func annoteNoteWithWhereWhen(xnote *note.Note, req notecard.Request) {
+func annotateNoteWithWhereWhen(xnote *note.Note, req notecard.Request) {
 	if req.Time != 0 || req.Latitude != 0 || req.Longitude != 0 {
+		if req.Time == InvalidTime {
+			req.Time = 0
+		}
 		newHistory := note.History{}
 		newHistory.When = req.Time
 		newHistory.Where = req.LocationOLC

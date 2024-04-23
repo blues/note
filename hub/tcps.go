@@ -22,7 +22,7 @@ import (
 // tcpsHandler kicks off TLS request server
 func tcpsHandler() {
 	// Tell Notelib that we are serving TLS so it will reject TCP-only connect attempts
-	notelib.RegisterTLSSupport()
+	notelib.SetTLSSupport(true)
 
 	fmt.Printf("Serving requests on tcps:%s%s\n", serverAddress, serverPortTCPS)
 
