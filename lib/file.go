@@ -280,7 +280,7 @@ func fsWriteNotefile(ctx context.Context, file *Notefile, container string, obje
 	// Convert to JSON
 	jsonNotefile, err := file.uConvertToJSON(true)
 	if err != nil {
-		logWarn("file: error converting %d-note notefile %s to json: %s", len(file.Notes), object, err)
+		logWarn(ctx, "file: error converting %d-note notefile %s to json: %s", len(file.Notes), object, err)
 		return err
 	}
 
@@ -293,7 +293,7 @@ func fsWriteNotefile(ctx context.Context, file *Notefile, container string, obje
 
 	// Debug
 	if debugFile {
-		logDebug("file: wrote %s %db containing %d notes", object, len(jsonNotefile), len(file.Notes))
+		logDebug(ctx, "file: wrote %s %db containing %d notes", object, len(jsonNotefile), len(file.Notes))
 	}
 
 	// Done
@@ -312,13 +312,13 @@ func fsReadNotefile(ctx context.Context, container string, object string) (notef
 	// Unmarshal the contents
 	file, err := jsonConvertJSONToNotefile(contents)
 	if err != nil {
-		logWarn("file: error converting notefile %s to json: %s", object, err)
+		logWarn(ctx, "file: error converting notefile %s to json: %s", object, err)
 		return &Notefile{}, err
 	}
 
 	// Debug
 	if debugFile {
-		logDebug("file: read %s %db containing %d notes", object, len(contents), len(file.Notes))
+		logDebug(ctx, "file: read %s %db containing %d notes", object, len(contents), len(file.Notes))
 	}
 
 	// Done

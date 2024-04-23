@@ -14,6 +14,7 @@ type DiscoverInfo struct {
 	HubEndpointID                 string
 	HubSessionHandler             string
 	HubSessionTicket              string
+	HubPacketHandler              string
 	HubDeviceStorageObject        string
 	HubDeviceAppUID               string
 	HubTimeNs                     int64
@@ -22,7 +23,7 @@ type DiscoverInfo struct {
 }
 
 // DiscoverFunc is the func to retrieve discovery info for this server
-type DiscoverFunc func(edgeUID string, deviceSN string, productUID string, hostname string) (info DiscoverInfo, err error)
+type DiscoverFunc func(edgeUID string, deviceSN string, productUID string, hostname string, packetHandlerVersion string) (info DiscoverInfo, err error)
 
 var fnDiscover DiscoverFunc
 
@@ -43,7 +44,7 @@ func HubDiscover(deviceUID string, deviceSN string, productUID string) (hubSessi
 	}
 
 	// Call the discover func with the null edge UID just to get basic server info
-	discinfo, err := fnDiscover(deviceUID, deviceSN, productUID, "*")
+	discinfo, err := fnDiscover(deviceUID, deviceSN, productUID, "*", "")
 	if err != nil {
 		err = fmt.Errorf("error from discovery handler for %s: %s", deviceUID, err)
 		return
@@ -53,14 +54,14 @@ func HubDiscover(deviceUID string, deviceSN string, productUID string) (hubSessi
 }
 
 // HubDiscover calls the discover function, and return discovery info
-func hubProcessDiscoveryRequest(deviceUID string, deviceSN string, productUID string, hostname string) (info DiscoverInfo, err error) {
+func hubProcessDiscoveryRequest(deviceUID string, deviceSN string, productUID string, hostname string, packetHandlerVersion string) (info DiscoverInfo, err error) {
 	if fnDiscover == nil {
 		err = fmt.Errorf("no discovery function is available")
 		return
 	}
 
 	// Call the discover func
-	info, err = fnDiscover(deviceUID, deviceSN, productUID, hostname)
+	info, err = fnDiscover(deviceUID, deviceSN, productUID, hostname, packetHandlerVersion)
 	if err != nil {
 		err = fmt.Errorf("error from discovery handler for %s: %s", deviceUID, err)
 		return

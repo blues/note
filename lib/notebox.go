@@ -51,6 +51,16 @@ var (
 	CheckpointSilently    = false
 )
 
+// Information about files and templates
+type NoteboxNotefileInfo struct {
+	NotefileID      string
+	Info            note.NotefileInfo
+	BodyTemplate    string
+	PayloadTemplate uint32
+	TemplateFormat  uint32
+	TemplatePort    uint16
+}
+
 // See if a string is in a string array
 func isNoteInNoteArray(val string, array []string) bool {
 	for i := range array {
@@ -104,7 +114,7 @@ func initNotebox(ctx context.Context, endpointID string, boxStorage string, stor
 	}
 
 	if debugBox {
-		logDebug("%s created", boxStorage)
+		logDebug(ctx, "%s created", boxStorage)
 	}
 
 	// Done
@@ -214,7 +224,7 @@ func uReopenNotebox(ctx context.Context, localEndpointID string, boxLocalStorage
 	boxOpenfile := iv.(*OpenNotefile)
 	atomic.AddInt32(&boxOpenfile.openCount, 1)
 	if debugBox {
-		logDebug("After openbox, %s open refcnt now %d", boxLocalStorage, boxOpenfile.openCount)
+		logDebug(ctx, "After openbox, %s open refcnt now %d", boxLocalStorage, boxOpenfile.openCount)
 	}
 
 	// Done
@@ -255,7 +265,7 @@ func OpenNotebox(ctx context.Context, localEndpointID string, boxLocalStorage st
 	boxOpenfile.storage = boxLocalStorage
 	boxOpenfile.openCount = 1
 	if debugBox {
-		logDebug("After openbox, %s open refcnt now %d", boxLocalStorage, boxOpenfile.openCount)
+		logDebug(ctx, "After openbox, %s open refcnt now %d", boxLocalStorage, boxOpenfile.openCount)
 	}
 
 	// Create a new open notebox and add it to the global list
@@ -298,7 +308,7 @@ func autoCheckpoint(ctx context.Context) {
 		time.Sleep(time.Duration(AutoCheckpointSeconds) * time.Second)
 		err := checkpointAllNoteboxes(ctx, false)
 		if err != nil {
-			logError("autoCheckpoint error: %s", err)
+			logError(ctx, "autoCheckpoint error: %s", err)
 		}
 	}
 }
@@ -309,7 +319,7 @@ func autoPurge(ctx context.Context) {
 		time.Sleep(time.Duration(AutoPurgeSeconds) * time.Second)
 		err := checkpointAllNoteboxes(ctx, true)
 		if err != nil {
-			logError("autoPurge error: %s", err)
+			logError(ctx, "autoPurge error: %s", err)
 		}
 	}
 }
@@ -391,7 +401,7 @@ func checkpointAllNoteboxes(ctx context.Context, purge bool) error {
 		if purge && emptyBox {
 			openboxes.Delete(boxStorage)
 			if debugBox {
-				logDebug("Notebox %s purged", boxStorage)
+				logDebug(ctx, "Notebox %s purged", boxStorage)
 			}
 		}
 
@@ -440,7 +450,7 @@ func (box *Notebox) checkpoint(ctx context.Context, write bool, purgeClosed bool
 				if purgeClosedDeleted && openfile.deleted {
 					box.instance.openfiles.Delete(fileStorage)
 					if debugBox {
-						logDebug("%s purged (had been deleted)", fileStorage)
+						logDebug(ctx, "%s purged (had been deleted)", fileStorage)
 					}
 					openfile.lock.Unlock()
 					return true
@@ -453,9 +463,9 @@ func (box *Notebox) checkpoint(ctx context.Context, write bool, purgeClosed bool
 					box.instance.openfiles.Delete(fileStorage)
 					if debugBox {
 						if openfile.deleted {
-							logDebug("%s purged (had been deleted)", fileStorage)
+							logDebug(ctx, "%s purged (had been deleted)", fileStorage)
 						} else {
-							logDebug("%s purged", fileStorage)
+							logDebug(ctx, "%s purged", fileStorage)
 						}
 					}
 					openfile.lock.Unlock()
@@ -494,7 +504,7 @@ func (box *Notebox) checkpointNotefile(ctx context.Context, openfile *OpenNotefi
 	modCount := openfile.notefile.Modified()
 	if modCount != openfile.modCountAfterCheckpoint {
 		if !CheckpointSilently {
-			logDebug("CHECKPOINTED %s (%d mods, %d since first opened)", openfile.storage, modCount-openfile.modCountAfterCheckpoint, modCount)
+			logDebug(ctx, "CHECKPOINTED %s (%d mods, %d since first opened)", openfile.storage, modCount-openfile.modCountAfterCheckpoint, modCount)
 		}
 		// Write storage unless the underlying storage has been deleted during a Notebox merge
 		if !openfile.deleted {
@@ -509,7 +519,7 @@ func (box *Notebox) checkpointNotefile(ctx context.Context, openfile *OpenNotefi
 		if err == nil {
 			openfile.modCountAfterCheckpoint = modCount
 		} else {
-			logError("Error checkpointing %s: %s", openfile.storage, err)
+			logError(ctx, "Error checkpointing %s: %s", openfile.storage, err)
 		}
 
 	}
@@ -539,7 +549,7 @@ func (box *Notebox) Notefiles(includeTombstones bool) (notefiles []string) {
 	boxfile.lock.RUnlock()
 
 	if debugBox {
-		logDebug("All Notefiles:\n%v", allNotefiles)
+		logDebug(context.Background(), "All Notefiles:\n%v", allNotefiles)
 	}
 
 	return allNotefiles
@@ -647,7 +657,7 @@ func (box *Notebox) Close(ctx context.Context) (err error) {
 	boxOpenfile.sanityCheckOpenCount()
 	boxOpenfile.closeTime = time.Now()
 	if debugBox {
-		logDebug("After closebox, %s close refcnt=%d modcnt=%d", box.instance.storage, boxOpenfile.openCount, boxOpenfile.modCountAfterCheckpoint)
+		logDebug(ctx, "After closebox, %s close refcnt=%d modcnt=%d", box.instance.storage, boxOpenfile.openCount, boxOpenfile.modCountAfterCheckpoint)
 	}
 
 	// Done
@@ -872,7 +882,7 @@ func (box *Notebox) uAddNotefile(ctx context.Context, notefileID string, notefil
 
 	// Debug
 	if debugBox {
-		logDebug("Adding: %s", notefileID)
+		logDebug(ctx, "Adding: %s", notefileID)
 	}
 
 	// Find the specified notefile descriptor and instance
@@ -904,7 +914,7 @@ func (box *Notebox) uAddNotefile(ctx context.Context, notefileID string, notefil
 			return err
 		}
 		if debugBox {
-			logDebug("%s info updated: %v", notefileID, notefileInfo)
+			logDebug(ctx, "%s info updated: %v", notefileID, notefileInfo)
 		}
 	}
 
@@ -953,7 +963,7 @@ func (box *Notebox) uAddNotefile(ctx context.Context, notefileID string, notefil
 	}
 
 	if debugBox {
-		logDebug("%s created", fileStorage)
+		logDebug(ctx, "%s created", fileStorage)
 	}
 
 	// Done
@@ -988,7 +998,7 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 	// Purge all deleted notefiles from the notebox, because we may be opening one that was deleted
 	_, err = box.checkpoint(ctx, false, false, false, true)
 	if err != nil {
-		logError("checkpoint error: %s", err)
+		logError(ctx, "checkpoint error: %s", err)
 	}
 
 	// Lock the notebox
@@ -1024,8 +1034,16 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 		// Increment the refcnt
 		atomic.AddInt32(&openfile.openCount, 1)
 		if debugBox {
-			logDebug("After openfile, %s open refcnt now %d", filestorage, openfile.openCount)
+			logDebug(ctx, "After openfile, %s open refcnt now %d", filestorage, openfile.openCount)
 		}
+
+		// Insert other info into needed for the Notifier.  We must do this when we
+		// reopen simply because the notefile could have been opened in the context of a
+		// session, but then the session may go away.  If an HTTP API such as note.add
+		// then comes in, the event will be referencing the now-defunct session and
+		// it will never get sent to the worker.  This forces the session to be
+		// refreshed every time we open the notefile, thus ensuring session freshness.
+		openfile.notefile.SetEventInfo(box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventProductUID, box.defaultEventAppUID, box.defaultEventFn, box.defaultEventSession)
 
 		// Done
 		return openfile, openfile.notefile, nil
@@ -1044,7 +1062,7 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 	// than getting stuck in a mode where we can't open or otherwise manipulate the contents.
 	notefile, err = storage.readNotefile(ctx, box.instance.storage, filestorage)
 	if err != nil {
-		logError("recovering from error reading notefile from %s: %s", filestorage, err)
+		logError(ctx, "recovering from error reading notefile from %s: %s", filestorage, err)
 		notefile = CreateNotefile(false)
 	}
 
@@ -1060,7 +1078,7 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 	// deviceUID or productUID on the client side because they are not always known
 	// at the time we do the open.  As such, client-side notifiers will need
 	// to function without these values.
-	notefile.SetEventInfo(box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventProductUID, box.defaultEventAppUID, box.defaultEventFn, box.defaultEventCtx)
+	notefile.SetEventInfo(box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventProductUID, box.defaultEventAppUID, box.defaultEventFn, box.defaultEventSession)
 
 	// Copy the notefile info for all but box notefiles
 	if notefileID != box.instance.endpointID {
@@ -1078,7 +1096,7 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 	openfile.box = box
 	openfile.openCount = 1
 	if debugBox {
-		logDebug("After openfile, %s open refcnt now %d", filestorage, openfile.openCount)
+		logDebug(ctx, "After openfile, %s open refcnt now %d", filestorage, openfile.openCount)
 	}
 
 	// Add this to the global list of open notefiles for this box
@@ -1095,13 +1113,13 @@ func (box *Notebox) SetClientInfo(httpReq *http.Request, httpRsp http.ResponseWr
 }
 
 // SetEventInfo establishes default information used for change notification on notefiles opened in the box
-func (box *Notebox) SetEventInfo(deviceUID string, deviceSN string, productUID string, appUID string, iFn EventFunc, iCtx interface{}) {
+func (box *Notebox) SetEventInfo(deviceUID string, deviceSN string, productUID string, appUID string, eventFn EventFunc, session *HubSession) {
 	box.defaultEventDeviceUID = deviceUID
 	box.defaultEventDeviceSN = deviceSN
 	box.defaultEventProductUID = productUID
 	box.defaultEventAppUID = appUID
-	box.defaultEventFn = iFn
-	box.defaultEventCtx = iCtx
+	box.defaultEventFn = eventFn
+	box.defaultEventSession = session
 }
 
 // GetEventInfo retrieves the info
@@ -1143,7 +1161,7 @@ func (openfile *OpenNotefile) Close(ctx context.Context) (err error) {
 	// Defensive coding only
 	openfile.sanityCheckOpenCount()
 	if openfile.openCount == 0 {
-		logError("*** MISMATCHED OpenNotefile/CloseNotefile ***")
+		logError(ctx, "*** MISMATCHED OpenNotefile/CloseNotefile ***")
 		return fmt.Errorf("notefile being closed without a matching open")
 	}
 
@@ -1151,7 +1169,7 @@ func (openfile *OpenNotefile) Close(ctx context.Context) (err error) {
 	atomic.AddInt32(&openfile.openCount, -1)
 	openfile.closeTime = time.Now()
 	if debugBox {
-		logDebug("After closefile of %s, close refcnt now %d", openfile.storage, openfile.openCount)
+		logDebug(ctx, "After closefile of %s, close refcnt now %d", openfile.storage, openfile.openCount)
 	}
 
 	// Checkpoint to make sure everything is up-to-date
@@ -1165,16 +1183,16 @@ func (openfile *OpenNotefile) Close(ctx context.Context) (err error) {
 
 func (openfile *OpenNotefile) sanityCheckOpenCount() {
 	if openfile.openCount < 0 {
-		logError("openCount for %s is negative: %d", openfile.notefile.notefileID, openfile.openCount)
+		logError(context.Background(), "openCount for %s is negative: %d", openfile.notefile.notefileID, openfile.openCount)
 	} else if openfile.openCount > 100 {
-		logWarn("openCount for %s is unusually high: %d", openfile.notefile.notefileID, openfile.openCount)
+		logWarn(context.Background(), "openCount for %s is unusually high: %d", openfile.notefile.notefileID, openfile.openCount)
 	}
 }
 
 // DeleteNotefile deletes a closed Notefile, and releases its storage.
 func (box *Notebox) DeleteNotefile(ctx context.Context, notefileID string) (err error) {
 	if debugBox {
-		logDebug("Deleting %s", notefileID)
+		logDebug(ctx, "Deleting %s", notefileID)
 	}
 
 	// Lock the notebox
@@ -1213,7 +1231,7 @@ func (box *Notebox) DeleteNotefile(ctx context.Context, notefileID string) (err 
 			if currentlyOpen {
 				box.Openfile().lock.Unlock()
 				if debugBox {
-					logDebug("Can't delete: %s is in use", notefileID)
+					logDebug(ctx, "Can't delete: %s is in use", notefileID)
 				}
 				return fmt.Errorf(note.ErrNotefileInUse+" deleting notefile: notefile is currently open: %s", notefileID)
 			}
@@ -1259,9 +1277,10 @@ func (box *Notebox) GetNote(ctx context.Context, notefileID string, noteID strin
 	return
 }
 
-// addNote adds a new note to a notefile but rejects attempts to add more than 100 notes
-func (box *Notebox) addNoteLimited(ctx context.Context, endpointID string, notefileID string, noteID string, note note.Note) (err error) {
-	payloadMaxBytes := 250
+// Checks a notefile and rejects attempts to add more than 100 notes
+func (box *Notebox) checkAddNoteLimits(ctx context.Context, notefileID string, note note.Note) (err error) {
+
+	payloadMaxBytes := 256 // Arduino MQQT payloads are 256
 	if note.Payload != nil && len(note.Payload) > payloadMaxBytes {
 		return fmt.Errorf("%d-byte payload (maximum of %d bytes allowed)", len(note.Payload), payloadMaxBytes)
 	}
@@ -1278,8 +1297,6 @@ func (box *Notebox) addNoteLimited(ctx context.Context, endpointID string, notef
 		return fmt.Errorf("a maximum of %d notes may be pending for device (currently %d)", notesMax, notes)
 	}
 
-	_, err = file.AddNote(endpointID, noteID, note)
-
 	openfile.Close(ctx)
 
 	return err
@@ -1293,6 +1310,20 @@ func (box *Notebox) AddNote(ctx context.Context, endpointID string, notefileID s
 	}
 
 	_, err = file.AddNote(endpointID, noteID, note)
+
+	openfile.Close(ctx)
+
+	return err
+}
+
+// AddNoteWithHistory adds a new note to a notefile, with history supplied
+func (box *Notebox) AddNoteWithHistory(ctx context.Context, endpointID string, notefileID string, noteID string, note note.Note) (err error) {
+	openfile, file, err := box.OpenNotefile(ctx, notefileID)
+	if err != nil {
+		return err
+	}
+
+	_, err = file.AddNoteWithHistory(endpointID, noteID, note)
 
 	openfile.Close(ctx)
 
@@ -1431,7 +1462,7 @@ func (box *Notebox) MergeNotebox(ctx context.Context, fromBoxfile *Notefile) (er
 	}
 
 	if debugBox {
-		logDebug("MergeNotebox:\ndeletedGloballyNoteID: %v\nexistsGloballyNoteID: %v\ndeletedLocally: %v\nexistsLocally: %v", deletedGloballyNoteID, existsGloballyNoteID, deletedLocally, existsLocally)
+		logDebug(ctx, "MergeNotebox:\ndeletedGloballyNoteID: %v\nexistsGloballyNoteID: %v\ndeletedLocally: %v\nexistsLocally: %v", deletedGloballyNoteID, existsGloballyNoteID, deletedLocally, existsLocally)
 	}
 
 	// 1. For all that are globally deleted, make sure they are deleted locally
@@ -1482,7 +1513,7 @@ func (box *Notebox) MergeNotebox(ctx context.Context, fromBoxfile *Notefile) (er
 			// Add a new notefile
 			err = box.uAddNotefile(ctx, notefileID, nil, CreateNotefile(false))
 			if err != nil {
-				logError("NoteboxMerge: can't add notefile %s: %s", notefileID, err)
+				logError(ctx, "NoteboxMerge: can't add notefile %s: %s", notefileID, err)
 			}
 
 		}
@@ -1498,7 +1529,7 @@ func (box *Notebox) MergeNotebox(ctx context.Context, fromBoxfile *Notefile) (er
 	if didSomething {
 		_, err = box.checkpoint(ctx, true, false, false, false)
 		if err != nil {
-			logError("NoteboxMerge: error checkpointing: %s", err)
+			logError(ctx, "NoteboxMerge: error checkpointing: %s", err)
 		}
 	}
 
@@ -1523,4 +1554,42 @@ func (box *Notebox) VerifyAccess(resource string, actions string) (err error) {
 		return fnNoteboxAccess(box.clientHTTPReq, box.clientHTTPRsp, resource, actions)
 	}
 	return nil
+}
+
+// NoteboxNotefileInfo gets info about all notefiles in a notebox
+func (box *Notebox) NoteboxNotefileInfo() (allInfo []NoteboxNotefileInfo) {
+
+	// Enum all notes in the boxfile, looking at the global files only
+	boxfile := box.Notefile()
+	boxfile.lock.RLock()
+	for noteID, xnote := range boxfile.Notes {
+		isInstance, _, notefileID := parseCompositeNoteID(noteID)
+		if !isInstance && !xnote.Deleted {
+			notefileBody := noteboxBodyFromJSON(xnote.GetBody())
+			info := NoteboxNotefileInfo{}
+			info.NotefileID = notefileID
+			if notefileBody.Notefile.Info != nil {
+				info.Info = *notefileBody.Notefile.Info
+			}
+			info.BodyTemplate = notefileBody.Notefile.BodyTemplate
+			info.PayloadTemplate = notefileBody.Notefile.PayloadTemplate
+			info.TemplateFormat = notefileBody.Notefile.TemplateFormat
+			info.TemplatePort = notefileBody.Notefile.TemplatePort
+			allInfo = append(allInfo, info)
+		}
+	}
+	boxfile.lock.RUnlock()
+
+	return allInfo
+
+}
+
+// NoteboxNotefileInfoByPort gets info about all notefiles in a notebox
+func NoteboxNotefileInfoByPort(allInfo []NoteboxNotefileInfo, port uint16) (info NoteboxNotefileInfo, present bool) {
+	for _, inf := range allInfo {
+		if inf.TemplatePort == port {
+			return inf, true
+		}
+	}
+	return
 }

@@ -7,6 +7,9 @@ package notelib
 
 import (
 	"bytes"
+	"context"
+	"crypto/cipher"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +21,7 @@ import (
 	"github.com/blues/note-go/notecard"
 	"github.com/golang/snappy"
 	olc "github.com/google/open-location-code/go"
+	"golang.org/x/crypto/chacha20poly1305"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -113,7 +117,7 @@ func scanForJSONValue(buf []byte, field string) (tokenBuf []byte) {
 	}
 
 	if debugCompress {
-		logDebug("#### longest token (%d) occurrences %d savings %d: %s",
+		logDebug(context.Background(), "#### longest token (%d) occurrences %d savings %d: %s",
 			len(tokenBuf), occurrences, (occurrences*len(tokenBuf))-occurrences, tokenBuf)
 	}
 
@@ -135,7 +139,7 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 
 		// Debug
 		if debugCompress {
-			logDebug("JSON no compression (%d)", len(normal)+1)
+			logDebug(context.Background(), "JSON no compression (%d)", len(normal)+1)
 		}
 
 		return
@@ -185,7 +189,7 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 
 	// JSON compression followed by Snappy compression
 	if debugCompress {
-		logDebug("  JSON compressed from %d to %d", len(normal), len(jcompressed))
+		logDebug(context.Background(), "  JSON compressed from %d to %d", len(normal), len(jcompressed))
 	}
 
 	// Snappy
@@ -194,7 +198,7 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 		compressed = append(compressed, jcompressed...)
 
 		if debugCompress {
-			logDebug(" plus header byte from %d to %d", len(jcompressed), len(compressed))
+			logDebug(context.Background(), " plus header byte from %d to %d", len(jcompressed), len(compressed))
 		}
 
 	} else {
@@ -203,8 +207,8 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 		compressed = append(compressed, scompressed...)
 
 		if debugCompress {
-			logDebug("      plus Snappy from %d to %d", len(jcompressed), len(scompressed))
-			logDebug(" plus header byte from %d to %d", len(scompressed), len(compressed))
+			logDebug(context.Background(), "      plus Snappy from %d to %d", len(jcompressed), len(scompressed))
+			logDebug(context.Background(), " plus header byte from %d to %d", len(scompressed), len(compressed))
 		}
 
 	}
@@ -228,13 +232,13 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 
 		// Debug
 		if debugCompress {
-			logDebug("No decompression (%d)", len(normal))
+			logDebug(context.Background(), "No decompression (%d)", len(normal))
 		}
 		return
 	}
 
 	if debugCompress {
-		logDebug(" Removed header byte from %d to %d", len(compressed)+1, len(compressed))
+		logDebug(context.Background(), " Removed header byte from %d to %d", len(compressed)+1, len(compressed))
 	}
 
 	sdecompressed := compressed
@@ -249,7 +253,7 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 		}
 
 		if debugCompress {
-			logDebug(" Snappy decompressed from %d to %d", len(compressed), len(sdecompressed))
+			logDebug(context.Background(), " Snappy decompressed from %d to %d", len(compressed), len(sdecompressed))
 		}
 
 	} else {
@@ -312,7 +316,7 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 
 	// Debug
 	if debugCompress {
-		logDebug("           then JSON from %d to %d", len(sdecompressed), len(jdecompressed))
+		logDebug(context.Background(), "           then JSON from %d to %d", len(sdecompressed), len(jdecompressed))
 	}
 
 	normal = jdecompressed
@@ -667,6 +671,9 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.WhereWhen != 0 {
 		pb.WhereWhen = &msg.WhereWhen
 	}
+	if msg.HubPacketHandler != "" {
+		pb.HubPacketHandler = &msg.HubPacketHandler
+	}
 	if msg.HubSessionHandler != "" {
 		pb.HubSessionHandler = &msg.HubSessionHandler
 	}
@@ -950,7 +957,7 @@ func u32min(x, y uint32) uint32 {
 }
 
 // WireBarsFromSession extracts device's perception of the number of bars of signal from a session
-func WireBarsFromSession(session *HubSessionContext) (rat string, bars uint32) {
+func WireBarsFromSession(session *HubSession) (rat string, bars uint32) {
 	// Return the rat for the session
 	rat = session.Session.Rat
 
@@ -1011,16 +1018,24 @@ func WireBarsFromSession(session *HubSessionContext) (rat string, bars uint32) {
 }
 
 // WireExtractSessionContext extracts session context from the wire message
-func WireExtractSessionContext(wire []byte, session *HubSessionContext) (suppressResponse bool, err error) {
+func WireExtractSessionContext(wire []byte, session *HubSession) (suppressResponse bool, err error) {
 	var req notehubMessage
 	req, _, err = msgFromWire(wire)
 	if err != nil {
 		return
 	}
+
+	// If the productUID is already set for this session leave it alone.  This
+	// covers the case in which the notehub implementation wishes to redirect
+	// one productUID to another.
+	if session.Session.ProductUID == "" {
+		session.Session.ProductUID = req.ProductUID
+	}
+
+	// Extract the remainder of the session context
 	suppressResponse = req.SuppressResponse
 	session.Session.DeviceUID = req.DeviceUID
 	session.Session.DeviceSN = req.DeviceSN
-	session.Session.ProductUID = req.ProductUID
 	session.DeviceSKU = req.DeviceSKU
 	session.DeviceOrderingCode = req.DeviceOrderingCode
 	session.DeviceFirmware = req.DeviceFirmware
@@ -1204,7 +1219,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 		err = fmt.Errorf("wire: can't read header")
 		return
 	}
-	protobufLength, binaryLength, err := wireReadHeader(wirever, wire[1:(hdrlen+1)])
+	protobufLength, binaryLength, err := wireReadHeader(wirever, wire[1:1+hdrlen])
 	if err != nil {
 		return
 	}
@@ -1239,6 +1254,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.DeviceEndpointID = pb.GetDeviceEndpointID()
 	msg.HubTimeNs = pb.GetHubTimeNs()
 	msg.HubEndpointID = pb.GetHubEndpointID()
+	msg.HubPacketHandler = pb.GetHubPacketHandler()
 	msg.HubSessionHandler = pb.GetHubSessionHandler()
 	msg.HubSessionFactoryResetID = pb.GetHubSessionFactoryResetID()
 	msg.HubSessionTicket = pb.GetHubSessionTicket()
@@ -1364,7 +1380,7 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		n, err2 = rdconn.Read(version)
 		if debugWireRead {
 			if err2 == nil {
-				logDebug("\n\nrdVersion(%d) %d", len(version), n)
+				logDebug(context.Background(), "\n\nrdVersion(%d) %d", len(version), n)
 			}
 		}
 		if err2, ok := err2.(net.Error); ok && err2.Timeout() {
@@ -1401,14 +1417,14 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 	header := make([]byte, headerLength)
 	_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
 	if debugWireRead {
-		logDebug("rdHeader(%d)", len(header))
+		logDebug(context.Background(), "rdHeader(%d)", len(header))
 	}
 	n, err = io.ReadFull(rdconn, header)
 	if debugWireRead {
 		if err == nil {
-			logDebug("rdHeader(%d) %d", len(header), n)
+			logDebug(context.Background(), "rdHeader(%d) %d", len(header), n)
 		} else {
-			logWarn("rdHeader(%d) %d %s", len(header), n, err)
+			logWarn(context.Background(), "rdHeader(%d) %d %s", len(header), n, err)
 		}
 	}
 	if err != nil {
@@ -1433,14 +1449,14 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		protobuf = make([]byte, protobufLength)
 		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
 		if debugWireRead {
-			logDebug("rdProtobuf(%d)", len(protobuf))
+			logDebug(context.Background(), "rdProtobuf(%d)", len(protobuf))
 		}
 		n, err = io.ReadFull(rdconn, protobuf)
 		if debugWireRead {
 			if err == nil {
-				logDebug("rdProtobuf(%d) %d", len(protobuf), n)
+				logDebug(context.Background(), "rdProtobuf(%d) %d", len(protobuf), n)
 			} else {
-				logWarn("rdProtobuf(%d) %d %s", len(protobuf), n, err)
+				logWarn(context.Background(), "rdProtobuf(%d) %d %s", len(protobuf), n, err)
 			}
 		}
 		if err != nil {
@@ -1467,14 +1483,14 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		binary = make([]byte, binaryLength)
 		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
 		if debugWireRead {
-			logDebug("rdBinary(%d)", len(binary))
+			logDebug(context.Background(), "rdBinary(%d)", len(binary))
 		}
 		n, err = io.ReadFull(rdconn, binary)
 		if debugWireRead {
 			if err == nil {
-				logDebug("rdBinary(%d) %d", len(binary), n)
+				logDebug(context.Background(), "rdBinary(%d) %d", len(binary), n)
 			} else {
-				logWarn("rdBinary(%d) %d %s", len(binary), n, err)
+				logWarn(context.Background(), "rdBinary(%d) %d %s", len(binary), n, err)
 			}
 		}
 		if err != nil {
@@ -1497,4 +1513,243 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		request = append(request, binary...)
 	}
 	return
+}
+
+// PacketMaxData returns the largest amount of data allowed
+func (h *PacketHandler) PacketMaxData(encrypted bool) (length int) {
+
+	// Compute the length available
+	length = int(h.Notecard.PacketMtu)
+
+	// Packet flag byte
+	length -= 1
+
+	// ConnectionID
+	if h.Notecard.PacketCidType != CidNone {
+		length -= len(h.Notehub.Cid)
+	}
+
+	// If encrypted
+	if encrypted {
+		length -= 1 // MessagePort
+		length -= ChaCha20Poly1305IvLen
+		length -= ChaCha20Poly1305AuthTagLen
+	} else {
+		length -= 1 // MessagePort
+	}
+
+	// Done
+	return length
+
+}
+
+// PacketToWire converts a Packet to wire format, which is wholly little-endian
+// See notehub-defs.go for binary wire format of PB payload
+func (h *PacketHandler) PacketToWire(payload Packet, secureData bool, downlinksPending bool) (msg []byte, err error) {
+
+	// Determine whether or not this packet will be encrypted
+	encrypted := secureData
+	if !h.Notehub.MayEncrypt {
+		encrypted = false
+	}
+	if h.Notehub.MustEncrypt {
+		encrypted = true
+	}
+
+	// Bail if too much data
+	if len(payload.Data) > h.PacketMaxData(encrypted) {
+		err = fmt.Errorf("data length %d is greater than max allowed %d", len(payload.Data), h.PacketMaxData(encrypted))
+		return
+	}
+
+	// Attempt to encode the data using Snappy, and only use the compressed data if it shrinks.
+	// This doesn't give us extra room to pack data within the MTU because it's coming too late,
+	// but this does save us over-the-air bytes and thus dollars.  Note that the data, but not
+	// the port, is compressed.  There's no reason for this other than code flow.
+	compressed := false
+	if len(payload.Data) > 0 {
+		data := snappy.Encode(nil, payload.Data)
+		if len(data) < len(payload.Data) {
+			payload.Data = data
+			compressed = true
+		}
+	}
+
+	// Construct the flag byte and insert it
+	packetHeader := h.Notecard.PacketCidType & PacketTypeMask
+	if encrypted {
+		packetHeader |= PacketFlagEncrypted
+	}
+	if compressed {
+		packetHeader |= PacketFlagCompressed
+	}
+	if downlinksPending {
+		packetHeader |= PacketFlagDownlinksPending
+	}
+	msg = append(msg, packetHeader)
+
+	// Append the connection ID
+	if h.Notecard.PacketCidType != CidNone {
+		msg = append(msg, h.Notehub.Cid...)
+	}
+
+	// If unencrypted, converting to wire is trivial
+	if !encrypted {
+		msg = append(msg, payload.MessagePort)
+		msg = append(msg, payload.Data...)
+		return
+	}
+
+	// Generate the cleartext by appending the data to the port
+	cleartext := append([]byte{payload.MessagePort}, payload.Data...)
+
+	// Encrypt, appending the MAC computed using the AuthTagPlaintext
+	var aead cipher.AEAD
+	aead, err = chacha20poly1305.New(h.Notecard.EncrKey)
+	if err != nil {
+		return
+	}
+	iv := make([]byte, ChaCha20Poly1305IvLen)
+	_, err = io.ReadFull(rand.Reader, iv)
+	if err != nil {
+		return
+	}
+	ciphertext := aead.Seal(nil, iv, cleartext, []byte(ChaCha20Poly1305AuthTagPlaintext))
+
+	// Append the IV, ciphertext, and authTag to the message, and we're done
+	msg = append(msg, iv...)
+	msg = append(msg, ciphertext...)
+	return
+
+}
+
+// packetHeaderFromWire extracts the connection ID from the wire format
+func PacketHeaderFromWire(wire []byte) (cid []byte, packetFlags byte, dataOffset int, err error) {
+
+	if len(wire) < 1 {
+		err = fmt.Errorf("packet: zero-length packet")
+		return
+	}
+
+	// Get the packet flags
+	packetFlags = wire[dataOffset]
+	packetType := packetFlags & PacketTypeMask
+	dataOffset++
+
+	// Return the connection ID if it's in the header
+	switch packetType {
+
+	case CidNone:
+
+	case CidRandom:
+		if len(wire)-dataOffset < CidRandomLen {
+			err = fmt.Errorf("packet: cid underrun")
+			return
+		}
+		cid = wire[dataOffset : dataOffset+CidRandomLen]
+		dataOffset += CidRandomLen
+
+	default:
+		err = fmt.Errorf("wire: packet: unknown CID type")
+		return
+
+	}
+
+	// Done
+	return
+
+}
+
+// PacketFromWire converts a request from wire format
+func (h *PacketHandler) PacketFromWire(wire []byte) (msg Packet, err error) {
+
+	off := 0
+	left := len(wire)
+
+	// Extract CID
+	var dataOffset int
+	var packetFlags byte
+	msg.ConnectionID, packetFlags, dataOffset, err = PacketHeaderFromWire(wire)
+	if err != nil {
+		return
+	}
+	off += dataOffset
+	left -= dataOffset
+
+	// If unencrypted, converting from wire is trivial
+	if (packetFlags & PacketFlagEncrypted) == 0 {
+		msg.Data = wire[off:]
+
+		// Extract the port
+		if len(msg.Data) < 1 {
+			err = fmt.Errorf("packet header trunc: port and data")
+			return
+		}
+		msg.MessagePort = msg.Data[0]
+		msg.Data = msg.Data[1:]
+
+		// If the packet's data was compressed, decompress it
+		if len(msg.Data) > 0 && (packetFlags&PacketFlagCompressed) != 0 {
+			msg.Data, err = snappy.Decode(nil, msg.Data)
+			if err != nil {
+				return
+			}
+		}
+
+		// Done
+		return
+
+	} else if h.Notecard.EncrAlg == "" || len(h.Notecard.EncrKey) == 0 {
+		err = fmt.Errorf("packet: encrypted packet received in absence of a PSK")
+		return
+	}
+
+	// Extract the IV
+	if left < ChaCha20Poly1305IvLen {
+		err = fmt.Errorf("packet header trunc: IV")
+		return
+	}
+	iv := wire[off : off+ChaCha20Poly1305IvLen]
+	off += ChaCha20Poly1305IvLen
+	left -= ChaCha20Poly1305IvLen
+
+	// Decrypt and verify auth tag
+	ciphertext := wire[off:]
+	var aead cipher.AEAD
+	aead, err = chacha20poly1305.New(h.Notecard.EncrKey)
+	if err != nil {
+		return
+	}
+	var cleartext []byte
+	cleartext, err = aead.Open(nil, iv, ciphertext, []byte(ChaCha20Poly1305AuthTagPlaintext))
+	if err != nil {
+		return
+	}
+
+	// Extract the port from the beginning of the decrypted data
+	if len(cleartext) < 2 {
+		err = fmt.Errorf("packet received too little data")
+		return
+	}
+	msg.MessagePort = cleartext[0]
+	msg.Data = cleartext[1:]
+
+	// If the packet's data was compressed, decompress it
+	if len(msg.Data) > 0 {
+		if (packetFlags & PacketFlagCompressed) != 0 {
+			msg.Data, err = snappy.Decode(nil, msg.Data)
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	// Final validation
+	if len(msg.Data) > h.PacketMaxData((packetFlags&PacketFlagEncrypted) != 0) {
+		err = fmt.Errorf("packet received data too large (%d)", left)
+		return
+	}
+
+	return
+
 }

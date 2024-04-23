@@ -34,7 +34,7 @@ type Notefile struct {
 	lock            sync.RWMutex         // Relies upon the notefile never being reallocated
 	modCount        int                  // Incremented every modification, for checkpointing purposes
 	eventFn         EventFunc            // The function to call when eventing of a change
-	eventCtx        interface{}          // An argument to be passed to the event call
+	eventSession    *HubSession          // An argument to be passed to the event call
 	eventDeviceUID  string               // The deviceUID being dealt with at the time of the event setup
 	eventDeviceSN   string               // The deviceSN being dealt with at the time of the event setup
 	eventProductUID string               // The productUID being dealt with at the time of the event setup
@@ -167,13 +167,13 @@ func (nf *Notefile) Info() (info note.NotefileInfo) {
 }
 
 // SetEventInfo supplies information used for change notification
-func (nf *Notefile) SetEventInfo(deviceUID string, deviceSN string, productUID string, appUID string, fn EventFunc, fnctx interface{}) {
+func (nf *Notefile) SetEventInfo(deviceUID string, deviceSN string, productUID string, appUID string, eventFn EventFunc, eventSession *HubSession) {
 	// Lock for writing
 	nf.lock.Lock()
 
 	// Lay out the data needed for the call
-	nf.eventFn = fn
-	nf.eventCtx = fnctx
+	nf.eventFn = eventFn
+	nf.eventSession = eventSession
 	nf.eventDeviceUID = deviceUID
 	nf.eventDeviceSN = deviceSN
 	nf.eventProductUID = productUID
@@ -184,14 +184,14 @@ func (nf *Notefile) SetEventInfo(deviceUID string, deviceSN string, productUID s
 }
 
 // GetEventInfo Gets information used for change notification
-func (nf *Notefile) GetEventInfo() (deviceUID string, deviceSN string, productUID string, appUID string, fn EventFunc, fnctx interface{}) {
+func (nf *Notefile) GetEventInfo() (deviceUID string, deviceSN string, productUID string, appUID string, eventFn EventFunc, eventSession *HubSession) {
 
 	// Lock for reading
 	nf.lock.RLock()
 
 	// Lay out the data needed for the call
-	fn = nf.eventFn
-	fnctx = nf.eventCtx
+	eventFn = nf.eventFn
+	eventSession = nf.eventSession
 	deviceUID = nf.eventDeviceUID
 	deviceSN = nf.eventDeviceSN
 	productUID = nf.eventProductUID
@@ -274,7 +274,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 		if ErrorContains(err, note.ErrNoteNoExist) {
 			return
 		}
-		logError("event: GetNote(%s) error: %s", NoteID, err)
+		logError(context.Background(), "event: GetNote(%s) error: %s", NoteID, err)
 		return
 	}
 
@@ -350,7 +350,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 			}
 		}
 		// No need to log customer data body
-		logDebug("%s", logString)
+		logDebug(context.Background(), "%s", logString)
 	}
 
 	// Disable the event function so as to avoid recursion
@@ -359,9 +359,9 @@ func (nf *Notefile) event(local bool, NoteID string) {
 
 	// Perform the notification (checking savedFn in case of race condition, because everything is unlocked
 	if savedFn != nil {
-		err = savedFn(context.Background(), nf.eventCtx, local, nf, &event)
+		err = savedFn(context.Background(), nf.eventSession, local, nf, &event)
 		if err != nil {
-			logError("event error: %s", err)
+			logError(context.Background(), "event notification error: %s %s %s: %s", nf.eventAppUID, event.DeviceUID, event.NotefileID, err)
 		}
 	}
 
@@ -417,7 +417,7 @@ func (nf *Notefile) MarkAsModified(reason string) {
 		if notefileID == "" {
 			notefileID = "notefile"
 		}
-		logDebug("%s modified: %s", notefileID, reason)
+		logDebug(context.Background(), "%s modified: %s", notefileID, reason)
 	}
 	nf.modCount++
 }
@@ -996,7 +996,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 
 	// Debug
 	if debugGetChanges {
-		logDebug("GetChanges %s ep:'%s' nf.Change:%d since:%d batch:%d optimize:%t", nf.notefileID, endpointID, nf.Change, since, maxBatchSize, optimize)
+		logDebug(context.Background(), "GetChanges %s ep:'%s' nf.Change:%d since:%d batch:%d optimize:%t", nf.notefileID, endpointID, nf.Change, since, maxBatchSize, optimize)
 	}
 
 	// Do a pass to compute the since/until that will give us the correct range for the batch.
@@ -1007,7 +1007,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 	array := make([]int64, maxBatchSize+1)
 	for noteID, note := range nf.Notes {
 		if debugGetChanges {
-			logDebug("note noteID:%s Change:%d Deleted:%t Sent:%t shouldIgnore:%t, isFullTombstone:%t",
+			logDebug(context.Background(), "note noteID:%s Change:%d Deleted:%t Sent:%t shouldIgnore:%t, isFullTombstone:%t",
 				noteID, note.Change, note.Deleted, note.Sent, changeShouldBeIgnored(&note, endpointID), isFullTombstone(note))
 		}
 		if !isFullTombstone(note) {
@@ -1016,14 +1016,14 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 		if note.Change >= since {
 			if optimize && changeShouldBeIgnored(&note, endpointID) {
 				if debugGetChanges {
-					logDebug("GetChanges ignoring noteID:%s note.Change:%d\n%v", noteID, note.Change, note)
+					logDebug(context.Background(), "GetChanges ignoring noteID:%s note.Change:%d\n%v", noteID, note.Change, note)
 				}
 				continue
 			}
 			if includeTombstones || !isFullTombstone(note) {
 				totalChanges++
 				if debugGetChanges {
-					logDebug("GetChanges sorting noteID:%s note.Change:%d totalChanges:%d", noteID, note.Change, totalChanges)
+					logDebug(context.Background(), "GetChanges sorting noteID:%s note.Change:%d totalChanges:%d", noteID, note.Change, totalChanges)
 				}
 				if array[0] == 0 || note.Change < array[maxBatchSize] {
 					if array[0] == 0 {
@@ -1042,7 +1042,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 		until = array[maxBatchSize]
 	}
 	if debugGetChanges {
-		logDebug("GetChanges until computed to be %d", until)
+		logDebug(context.Background(), "GetChanges until computed to be %d", until)
 	}
 
 	// If we're just counting, exit
@@ -1063,7 +1063,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 		}
 		if optimize && changeShouldBeIgnored(&note, endpointID) {
 			if debugGetChanges {
-				logDebug("GetChanges again skipping noteID:%s note.Change:%d\n%v", noteID, note.Change, note)
+				logDebug(context.Background(), "GetChanges again skipping noteID:%s note.Change:%d\n%v", noteID, note.Change, note)
 			}
 			continue
 		}
@@ -1073,7 +1073,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 		}
 		// We're now committed to the change.  Add it, and bump the change count
 		if debugGetChanges {
-			logDebug("GetChanges adding %s note.Change:%d", noteID, note.Change)
+			logDebug(context.Background(), "GetChanges adding %s note.Change:%d", noteID, note.Change)
 		}
 		err = newNotefile.uAddNoteEx(noteID, &note)
 		if err != nil {
@@ -1085,7 +1085,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 	}
 
 	if debugGetChanges {
-		logDebug("GetChanges done numChanges:%d", numChanges)
+		logDebug(context.Background(), "GetChanges done numChanges:%d", numChanges)
 	}
 
 	// If the number of changes returned is 0, it means that future searches for this endpoint
@@ -1098,7 +1098,7 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 			nf.Trackers[endpointID] = tracker
 			nf.MarkAsModified("GetChanges:None")
 			if debugGetChanges {
-				logDebug("GetChanges optimization enabled for future calls")
+				logDebug(context.Background(), "GetChanges optimization enabled for future calls")
 			}
 		}
 	}
@@ -1114,7 +1114,7 @@ func (nf *Notefile) PurgeTombstones(ignoreEndpointID string) {
 	nf.lock.Lock()
 
 	if debugGetChanges {
-		logDebug("purgeTombstones: %s", nf.notefileID)
+		logDebug(context.Background(), "purgeTombstones: %s", nf.notefileID)
 	}
 
 	// Compute the minimum change number of all tombstones
@@ -1129,7 +1129,7 @@ func (nf *Notefile) PurgeTombstones(ignoreEndpointID string) {
 	// If we don't have any deleted notes, we're done
 	if minDeletion >= nf.Change {
 		if debugGetChanges {
-			logDebug("purgeTombstones: no deleted notes")
+			logDebug(context.Background(), "purgeTombstones: no deleted notes")
 		}
 		nf.lock.Unlock()
 		return
@@ -1152,21 +1152,21 @@ func (nf *Notefile) PurgeTombstones(ignoreEndpointID string) {
 	// If there's nothing to purge, we're done
 	if minDeletion >= minTracked {
 		if debugGetChanges {
-			logDebug("purgeTombstones: nothing to purge")
+			logDebug(context.Background(), "purgeTombstones: nothing to purge")
 		}
 		nf.lock.Unlock()
 		return
 	}
 
 	if debugGetChanges {
-		logDebug("purgeTombstones: purging with minTracked:%d", minTracked)
+		logDebug(context.Background(), "purgeTombstones: purging with minTracked:%d", minTracked)
 	}
 
 	// Purge the tombstones
 	for noteID, note := range nf.Notes {
 		if note.Deleted && note.Change < minTracked {
 			if debugGetChanges {
-				logDebug("purgeTombstones: deleting noteID:%s Sent:%t Deleted:%t Change:%d", noteID, note.Sent, note.Deleted, note.Change)
+				logDebug(context.Background(), "purgeTombstones: deleting noteID:%s Sent:%t Deleted:%t Change:%d", noteID, note.Sent, note.Deleted, note.Change)
 			}
 			delete(nf.Notes, noteID)
 			nf.MarkAsModified("GetChanges:PurgeTombstones")

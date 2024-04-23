@@ -6,8 +6,15 @@
 package notelib
 
 import (
+	"context"
+	"fmt"
+	"time"
+
 	"github.com/blues/note-go/note"
 )
+
+// HTTPUserAgent is the HTTP user agent for all our uses of HTTP
+const HTTPUserAgent = "BluesNotehub/1.0"
 
 // ReservedIDDelimiter is used to separate lists of noteIDs, notefileIDs, endpointIDs, thus is invalid in names
 const ReservedIDDelimiter = ","
@@ -138,6 +145,7 @@ type notehubMessage struct {
 	UsageSentBytesSecondary        uint32 `json:"Y,omitempty"`
 	Where                          string `json:"wh,omitempty"`
 	WhereWhen                      int64  `json:"ww,omitempty"`
+	HubPacketHandler               string `json:"ph,omitempty"`
 
 	// These fields are used within the handling of MessageType to mean things
 	// that are specific to the transaction type specified in MessageType.  Note
@@ -161,19 +169,8 @@ type notehubMessage struct {
 	*cf              `json:",omitempty"`
 }
 
-// Key for HubSessionContext when stored in a golang context
-type HubContextKey string
-
-const HubSessionContextKey HubContextKey = "HubSessionContext"
-
-// HubSessionContext are the fields that are coordinated between the client and
-// the server for the duration of an open session.  The Device substructure consists
-// of the fields written to the persistent Session record, while all else is ephemeral.
-type HubSessionContext struct {
-	Active             bool
-	Terminated         bool
-	IdForLogging       string
-	Transactions       int
+type HubSession struct {
+	// These is all the fields sent from the notecard and decoded in wire.go
 	Discovery          bool
 	Notification       bool
 	DeviceSKU          string
@@ -185,12 +182,214 @@ type HubSessionContext struct {
 	HubSessionTicket   string
 	FactoryResetID     string
 	Session            note.DeviceSession
+
+	// Information about the current session
+	SessionStart time.Time
+	AppUID       string
+	Active       bool
+	Terminated   bool
+	Transactions int
+
 	// Used for hubreq.go to retain inter-transaction state
 	Notefiles         []string
 	NotefilesUpdated  bool
 	PendingWebPayload []byte
 	DeviceMonitorID   int64
+
+	// This field is used for any hub implementation to attach
+	// data specific to that implementation
+	Hub interface{}
 }
 
-// HTTPUserAgent is the HTTP user agent for all our uses of HTTP
-const HTTPUserAgent = "BluesNotehub/1.0"
+func NewHubSession(sessionUID, handlerAddr string, secure bool) HubSession {
+	now := time.Now()
+	deviceSession := note.DeviceSession{}
+	deviceSession.SessionUID = sessionUID
+	deviceSession.Handler = handlerAddr
+	deviceSession.Period().Since = now.Unix()
+	deviceSession.TLSSession = secure
+
+	if secure {
+		deviceSession.Period().TLSSessions++
+	} else {
+		deviceSession.Period().TCPSessions++
+	}
+
+	return HubSession{
+		Session:      deviceSession,
+		SessionStart: now,
+	}
+}
+
+func (session HubSession) LogInfo(ctx context.Context, format string, args ...interface{}) {
+	if debugHubRequest {
+		logInfo(ctx, session.logTag()+" "+format, args...)
+	}
+}
+
+func (session HubSession) LogWarn(ctx context.Context, format string, args ...interface{}) {
+	if debugHubRequest {
+		logWarn(ctx, session.logTag()+" "+format, args...)
+	}
+}
+
+func (session HubSession) LogError(ctx context.Context, format string, args ...interface{}) {
+	if debugHubRequest {
+		logError(ctx, session.logTag()+" "+format, args...)
+	}
+}
+
+func (session HubSession) LogDebug(ctx context.Context, format string, args ...interface{}) {
+	if debugHubRequest {
+		logDebug(ctx, session.logTag()+" "+format, args...)
+	}
+}
+
+func (session HubSession) logTag() string {
+	sessionUID := "[NO-SESSION]"
+	deviceUID := "[NO-DEVICE]"
+	sessionTypes := ""
+
+	if len(session.Session.SessionUID) > 8 {
+		sessionUID = session.Session.SessionUID[:8]
+	} else if len(session.Session.SessionUID) > 0 {
+		sessionUID = session.Session.SessionUID
+	}
+
+	if len(session.Session.DeviceUID) > 0 {
+		deviceUID = session.Session.DeviceUID
+	}
+
+	if session.Notification {
+		sessionTypes += "N"
+	}
+	if session.Session.ContinuousSession {
+		sessionTypes += "C"
+	}
+	if session.Discovery {
+		sessionTypes += "D"
+	}
+	if sessionTypes == "" {
+		if len(session.Session.DeviceUID) > 0 {
+			sessionTypes = "P"
+		} else {
+			sessionTypes = "?"
+		}
+	}
+
+	return fmt.Sprintf("%s/%s (%s)", deviceUID, sessionUID, sessionTypes)
+}
+
+// PV1 wire format (see wire.go)
+//
+//	PacketType (high nibble, including a 'packet encrypted' flag)
+//	PacketCid (low nibble)
+//			0 None - the server knows which device is connected
+//			1 Server-assigned ConnectionID
+//	If PacketCid == CidRandom
+//			[CidRandomLen]uint8
+//	If sent to an unencrypted port:
+//		MessagePort uint8
+//		Data [0..N]uint8 (possibly Snappy-compressed)
+//	If sent to an encrypted port
+//		ChaCha20Poly1305Iv [ChaCha20Poly1305IvLen]uint8
+//		Ciphertext:
+//			MessagePort uint8
+//			Data uint8[0..N] (possibly Snappy-compressed)
+//		MAC derived from ChaCha20Poly1305AuthTagPlaintext:
+//			ChaCha20Poly1305AuthTag uint8[ChaCha20Poly1305AuthTagLen]
+
+// Packet type is split - a nibble of flags and a nibble of Connection ID type
+const PacketTypeMask = 0x0f
+
+const PacketFlagEncrypted = 0x80
+const PacketFlagCompressed = 0x40
+const PacketFlagDownlinksPending = 0x20
+const PacketFlagSpare1 = 0x10
+
+// Type of connection ID present in the packet
+const CidNone = byte(0)   // Zero bytes
+const CidRandom = byte(1) // CidRandomLen bytes
+
+const CidRandomLen = 6
+
+// Default MTU
+const UdpMinMtu = 256 // Below this, we really wouldn't have enough room for any user data to speak of
+const UdpMaxMtu = 548 // Minimum internet datagram is 576, IPv4 header is 20, UDP header is 8
+
+// Supported packet service types.  Except for UDP, where there is no ID, The appropriate ID for that service type
+// is appended.  For example, it might be the IMEI, IMSI, ICCID, or vendor-proprietary ID of the unit
+const UdpPs = "udp:"
+const UdpMtu = UdpMinMtu
+const UdpCidType = CidRandom
+
+// After trying AES GCM and struggling with block size and tag size constraints, and after then consulting
+// with the folks at WolfSSL, we arrived at using the ChaCha20 stream cipher (thus eliminating block constraints)
+// along with the Poly1305 MAC for integrity and authentication.
+const PV1 = "pv1"
+const PV1EncrAlg = "chacha20-poly1305"
+const ChaCha20Poly1305KeyLen = 32
+const ChaCha20Poly1305IvLen = 12
+const ChaCha20Poly1305AuthTagLen = 16
+const ChaCha20Poly1305AuthTagPlaintext = "notecard <3 notehub"
+
+// Message ports for packet handling
+const MportInvalid = 0
+const MportUserNotefileFirst = 1
+const MportUserNotefileLast = 100
+const MportSysNotefileFirst = 101
+const MportSysNotefileLast = 125
+const MportUserSysNotefileFirst = 126
+const MportUserSysNotefileLast = 150
+const MportChangesDownlink = 250
+const MportTimeDownlink = 251
+const MportMoreDownlink = 252
+const MportEchoDownlink = 253
+const MportMultiportUplink = 254         // Enum of <port><datalen><data>
+const MportMultiportUplinkDownlink = 255 // Same but with a guaranteed response formatted the same way
+
+const MportSysNotefileEnv = (MportSysNotefileFirst + 0)
+
+// Decoded packet
+type Packet struct {
+	ConnectionID []byte
+	MessagePort  uint8
+	Data         []byte
+}
+
+type PacketHandlerNotecard struct {
+	PacketService string `json:"service,omitempty"`
+	PacketCidType byte   `json:"cid_type,omitempty"`
+	PacketMtu     uint   `json:"packet_mtu,omitempty"`
+	EncrAlg       string `json:"alg,omitempty"`
+	EncrKey       []byte `json:"key,omitempty"`
+}
+
+type PacketHandlerNotehub struct {
+	// The Notehub generates a unique connection ID for every NTN device.  It
+	// is always assigned, and for certain NTN transports (such as UDP) it is
+	// carried 'in-band' in the packet contents, while for other transports
+	// (such as skylo) it is never carrierd on-the-wire.
+	CidType byte   `json:"cid_type,omitempty"` // CID_RANDOM
+	Cid     []byte `json:"cid,omitempty"`      // Random connection ID
+	// The Notehub can optionally tell the notecard to override the standard
+	// encryption for .dbs/.qos/.qis files, either forcing it to be ON or OFF
+	MustEncrypt bool `json:"encrall,omitempty"`
+	MayEncrypt  bool `json:"encr,omitempty"`
+	// Specifically used by the notecard/notehub when the transport is UDP
+	UdpMtu      uint   `json:"mtu,omitempty"`
+	UdpIpV4     string `json:"ipv4,omitempty"`
+	UdpIpV4Port string `json:"ipv4port,omitempty"`
+	UdpPolicy   string `json:"comms,omitempty"`
+}
+
+// Packet handler information
+type PacketHandler struct {
+	// Uploaded by Notecard when packet service is requested, and these are the
+	// parameters used when decoding packets from the notecard AND used when
+	// encoding packets to be sent back to the notecard.
+	Notecard PacketHandlerNotecard `json:"notecard,omitempty"`
+
+	// Set by Notehub by policy when handler is issued
+	Notehub PacketHandlerNotehub `json:"notehub,omitempty"`
+}

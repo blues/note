@@ -1,6 +1,7 @@
 ## To set up:
 ##   brew install protoc-gen-go
 ## protoc executable is placed on the standard path after installing standard PB support
+
 protoc --go_opt=Mnotehub.proto=./notelib --go_out=. notehub.proto
 mv notelib/*.go .
 rmdir notelib

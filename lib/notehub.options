@@ -9,6 +9,7 @@ notelib.NotehubPB.ProductUID max_size:254
 notelib.NotehubPB.DeviceEndpointID max_size:100
 notelib.NotehubPB.HubEndpointID max_size:100
 notelib.NotehubPB.HubSessionHandler max_size:254
+notelib.NotehubPB.HubPacketHandler max_size:254
 notelib.NotehubPB.NotefileID max_size:254
 notelib.NotehubPB.NotefileIDs max_size:254
 notelib.NotehubPB.HubSessionTicket max_size:128

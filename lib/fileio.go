@@ -76,7 +76,7 @@ func fileioCreate(ctx context.Context, path string) (err error) {
 func fileioWriteJSON(ctx context.Context, path string, data []byte) (err error) {
 	fd, err2 := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o666)
 	if err2 != nil {
-		logError("fileioWrite: error creating %s: %s", path, err)
+		logError(ctx, "fileioWrite: error creating %s: %s", path, err)
 		err = err2
 		return
 	}
@@ -84,7 +84,7 @@ func fileioWriteJSON(ctx context.Context, path string, data []byte) (err error) 
 	// Write it
 	_, err = fd.Write(data)
 	if err != nil {
-		logError("fileioWrite: error writing %s: %s", path, err)
+		logError(ctx, "fileioWrite: error writing %s: %s", path, err)
 		fd.Close()
 		return
 	}
