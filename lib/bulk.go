@@ -1231,10 +1231,10 @@ func (tmplContext *BulkTemplateContext) binAppendReal64(number float64) (err err
 }
 
 // Get a value
-func (tmplContext *BulkTemplateContext) processTemplateValue(level int, v *fastjson.Value, do map[string]interface{}, dok string, dov interface{}) (err error) {
+func (tmplContext *BulkTemplateContext) processTemplateValue(level int, v *fastjson.Value, dok string, dov interface{}) (err error) {
 
 	if debugEncoding {
-		fmt.Printf("%sprocessTemplateValue %s\n", strings.Repeat("  ", level), dok)
+		fmt.Printf("%sprocessTemplateValue key %s tmplType %s valType %T\n", strings.Repeat("  ", level), dok, v.Type(), dov)
 	}
 	beforeLen := len(tmplContext.Bin)
 
@@ -1242,12 +1242,6 @@ func (tmplContext *BulkTemplateContext) processTemplateValue(level int, v *fastj
 
 	case fastjson.TypeTrue:
 		var dv bool
-
-		if debugEncoding {
-			// Needed this printf to discover numeric type = json.Number
-			fmt.Printf("%s type %T\n", dok, dov)
-		}
-
 		s, isString := dov.(string)
 		b, isBool := dov.(bool)
 		i, isInt := dov.(int)
@@ -1294,113 +1288,143 @@ func (tmplContext *BulkTemplateContext) processTemplateValue(level int, v *fastj
 
 	case fastjson.TypeNumber:
 		format := v.GetFloat64()
-		s, isString := dov.(string)
-		var isInt bool
 		var ivalue int64
-		if isString {
-			// We do auto-coercision of strings to numbers so that we can parse
-			// values in environment variables for _env.dbi
-			// In Go playground it was found that ParseInt returns an error if
-			// it encounters a decimal point, so if there is no error we use its
-			// returned integer value in preference to casting the fvalue, since
-			// float64 cannot encode the entire range of int64 integers.
-			ivalue, err = strconv.ParseInt(s, 10, 64)
-			if err == nil {
-				isInt = true
-			}
-			f64, err := strconv.ParseFloat(s, 64)
-			if err != nil {
-				dov = 0
-			} else {
-				dov = f64
-			}
-		}
-		fvalue, _ := dov.(float64)
-		if !isInt {
-			ivalue = int64(fvalue)
-		}
-		_, isJsonNumber := dov.(json.Number)
-		if isJsonNumber {
-			fvalue, _ = dov.(json.Number).Float64()
-			ivalue, err = dov.(json.Number).Int64()
-			if err != nil {
-				if debugEncoding {
-					fmt.Printf("%s(can't extract value as int)\n", strings.Repeat("  ", level))
-				}
-				ivalue = int64(fvalue)
-			}
-		}
+		var fvalue float64
+
 		if dok == "_time" {
 			fvalue = float64(time.Now().UTC().Unix())
 			ivalue = int64(time.Now().UTC().Unix())
+		} else {
+			switch v := dov.(type) {
+			case string:
+				// We do auto-coercision of strings to numbers so that we can parse
+				// values in environment variables for _env.dbi
+				// In Go playground it was found that ParseInt returns an error if
+				// it encounters a decimal point, so if there is no error we use its
+				// returned integer value in preference to casting the fvalue, since
+				// float64 cannot encode the entire range of int64 integers.
+				fvalue, err = strconv.ParseFloat(v, 64)
+				if err == nil {
+					ivalue, err = strconv.ParseInt(v, 10, 64)
+					if err != nil {
+						ivalue = int64(fvalue)
+						err = nil
+					}
+				}
+			case float32:
+				fvalue = float64(v)
+				ivalue = int64(fvalue)
+			case float64:
+				fvalue = v
+				ivalue = int64(v)
+			case int:
+				ivalue = int64(v)
+				fvalue = float64(ivalue)
+			case int8:
+				ivalue = int64(v)
+				fvalue = float64(ivalue)
+			case int16:
+				ivalue = int64(v)
+				fvalue = float64(ivalue)
+			case int32:
+				ivalue = int64(v)
+				fvalue = float64(ivalue)
+			case int64:
+				ivalue = v
+				fvalue = float64(ivalue)
+			case uint:
+				ivalue = int64(v)
+				fvalue = float64(ivalue)
+			case uint8:
+				ivalue = int64(v)
+				fvalue = float64(ivalue)
+			case uint16:
+				ivalue = int64(v)
+				fvalue = float64(ivalue)
+			case uint32:
+				ivalue = int64(v)
+				fvalue = float64(ivalue)
+			case uint64:
+				ivalue = int64(v)
+				fvalue = float64(ivalue)
+
+			case json.Number:
+				fvalue, _ = dov.(json.Number).Float64()
+				ivalue, err = dov.(json.Number).Int64()
+				if err != nil {
+					if debugEncoding {
+						fmt.Printf("%s(can't extract value as int)\n", strings.Repeat("  ", level))
+					}
+					ivalue = int64(fvalue)
+					err = nil
+				}
+			}
 		}
 		if debugEncoding {
-			if isJsonNumber {
-				fmt.Printf("%sEMIT %T %f %d format %f\n", strings.Repeat("  ", level), dov, fvalue, ivalue, format)
-			} else {
-				fmt.Printf("%sEMIT %T %f %d format %f\n", strings.Repeat("  ", level), dov, fvalue, ivalue, format)
-			}
+			fmt.Printf("%sEMIT %T %f %d format %f err: %v\n", strings.Repeat("  ", level), dov, fvalue, ivalue, format, err)
 		}
-		if isPointOne(format, 18) || isPointOne(format, 1) { // 8-byte float64
-			err = tmplContext.binAppendReal64(fvalue)
-		} else if isPointOne(format, 14) { // 4-byte float32
-			err = tmplContext.binAppendReal32(float32(fvalue))
-		} else if isPointOne(format, 12) { // 2-byte float16
-			err = tmplContext.binAppendReal16(float32(fvalue))
-		} else if format == 18 { // 8-byte int
-			err = tmplContext.binAppendInt64(int64(ivalue))
-		} else if format == 28 { // 8-byte uint
-			err = tmplContext.binAppendUint64(uint64(ivalue))
-		} else if format == 14 || format == 1 { // 4-byte int
-			if ivalue > 2147483647 || ivalue < -2147483648 {
-				err = fmt.Errorf("number out of range of 4-byte int")
+		if err == nil {
+			if isPointOne(format, 18) || isPointOne(format, 1) { // 8-byte float64
+				err = tmplContext.binAppendReal64(fvalue)
+			} else if isPointOne(format, 14) { // 4-byte float32
+				err = tmplContext.binAppendReal32(float32(fvalue))
+			} else if isPointOne(format, 12) { // 2-byte float16
+				err = tmplContext.binAppendReal16(float32(fvalue))
+			} else if format == 18 { // 8-byte int
+				err = tmplContext.binAppendInt64(int64(ivalue))
+			} else if format == 28 { // 8-byte uint
+				err = tmplContext.binAppendUint64(uint64(ivalue))
+			} else if format == 14 || format == 1 { // 4-byte int
+				if ivalue > 2147483647 || ivalue < -2147483648 {
+					err = fmt.Errorf("number out of range of 4-byte int")
+				} else {
+					err = tmplContext.binAppendInt32(int32(ivalue))
+				}
+			} else if format == 24 { // 4-byte uint
+				if ivalue > 4294967295 || ivalue < 0 {
+					err = fmt.Errorf("number out of range of 4-byte unsigned int")
+				} else {
+					err = tmplContext.binAppendUint32(uint32(ivalue))
+				}
+			} else if format == 13 { // 3-byte int
+				if ivalue > 8388607 || ivalue < -8388608 {
+					err = fmt.Errorf("number out of range of 3-byte int")
+				} else {
+					err = tmplContext.binAppendInt24(int32(ivalue))
+				}
+			} else if format == 23 { // 3-byte uint
+				if ivalue > 16777215 || ivalue < 0 {
+					err = fmt.Errorf("number out of range of 3-byte unsigned int")
+				} else {
+					err = tmplContext.binAppendUint24(uint32(ivalue))
+				}
+			} else if format == 12 { // 2-byte int
+				if ivalue > 32767 || ivalue < -32768 {
+					err = fmt.Errorf("number out of range of 2-byte int")
+				} else {
+					err = tmplContext.binAppendInt16(int16(ivalue))
+				}
+			} else if format == 22 { // 2-byte uint
+				if ivalue > 65535 || ivalue < 0 {
+					err = fmt.Errorf("number out of range of 2-byte unsigned int")
+				} else {
+					err = tmplContext.binAppendUint16(uint16(ivalue))
+				}
+			} else if format == 11 { // 1-byte int
+				if ivalue > 127 || ivalue < -128 {
+					err = fmt.Errorf("number out of range of 1-byte int")
+				} else {
+					err = tmplContext.binAppendInt8(int8(ivalue))
+				}
+			} else if format == 21 { // 1-byte uint
+				if ivalue > 255 || ivalue < 0 {
+					err = fmt.Errorf("number out of range of 1-byte unsigned int")
+				} else {
+					err = tmplContext.binAppendUint8(uint8(ivalue))
+				}
 			} else {
-				err = tmplContext.binAppendInt32(int32(ivalue))
+				err = fmt.Errorf("unrecognized template field type indicator: %f", format)
 			}
-		} else if format == 24 { // 4-byte uint
-			if ivalue > 4294967295 || ivalue < 0 {
-				err = fmt.Errorf("number out of range of 4-byte unsigned int")
-			} else {
-				err = tmplContext.binAppendUint32(uint32(ivalue))
-			}
-		} else if format == 13 { // 3-byte int
-			if ivalue > 8388607 || ivalue < -8388608 {
-				err = fmt.Errorf("number out of range of 3-byte int")
-			} else {
-				err = tmplContext.binAppendInt24(int32(ivalue))
-			}
-		} else if format == 23 { // 3-byte uint
-			if ivalue > 16777215 || ivalue < 0 {
-				err = fmt.Errorf("number out of range of 3-byte unsigned int")
-			} else {
-				err = tmplContext.binAppendUint24(uint32(ivalue))
-			}
-		} else if format == 12 { // 2-byte int
-			if ivalue > 32767 || ivalue < -32768 {
-				err = fmt.Errorf("number out of range of 2-byte int")
-			} else {
-				err = tmplContext.binAppendInt16(int16(ivalue))
-			}
-		} else if format == 22 { // 2-byte uint
-			if ivalue > 65535 || ivalue < 0 {
-				err = fmt.Errorf("number out of range of 2-byte unsigned int")
-			} else {
-				err = tmplContext.binAppendUint16(uint16(ivalue))
-			}
-		} else if format == 11 { // 1-byte int
-			if ivalue > 127 || ivalue < -128 {
-				err = fmt.Errorf("number out of range of 1-byte int")
-			} else {
-				err = tmplContext.binAppendInt8(int8(ivalue))
-			}
-		} else if format == 21 { // 1-byte uint
-			if ivalue > 255 || ivalue < 0 {
-				err = fmt.Errorf("number out of range of 1-byte unsigned int")
-			} else {
-				err = tmplContext.binAppendUint8(uint8(ivalue))
-			}
-		} else {
-			err = fmt.Errorf("unrecognized template field type indicator: %f", format)
 		}
 
 	case fastjson.TypeObject:
@@ -1413,11 +1437,9 @@ func (tmplContext *BulkTemplateContext) processTemplateValue(level int, v *fastj
 
 	case fastjson.TypeArray:
 		a, _ := v.Array()
-		subArray, testOk := dov.([]interface{})
-		if dov == nil || !testOk || subArray == nil {
-			return
-		}
-		err = tmplContext.walkArray(level, a, subArray)
+		err = tmplContext.walkArray(level, a, dov)
+	default:
+		err = fmt.Errorf("unrecognized template field json type: %s", v.Type())
 	}
 
 	if debugEncoding {
@@ -1431,7 +1453,7 @@ func (tmplContext *BulkTemplateContext) processTemplateValue(level int, v *fastj
 }
 
 // Walk an object array (the only type of array supported)
-func (tmplContext *BulkTemplateContext) walkArray(level int, a []*fastjson.Value, da []interface{}) (err error) {
+func (tmplContext *BulkTemplateContext) walkArray(level int, a []*fastjson.Value, da interface{}) (err error) {
 
 	if a == nil {
 		return
@@ -1440,27 +1462,67 @@ func (tmplContext *BulkTemplateContext) walkArray(level int, a []*fastjson.Value
 		return
 	}
 
-	switch a[0].Type() {
-	case fastjson.TypeObject:
-		for i := 0; i < len(a); i++ {
-			do := map[string]interface{}{}
-			if i < len(da) {
-				v, testOK := da[i].(map[string]interface{})
-				if testOK && v != nil {
-					do = v
-				}
-			}
-			err = tmplContext.processTemplateValue(level+1, a[i], do, "", do)
+	if debugEncoding {
+		fmt.Printf("%swalkArray: %d elements\n", strings.Repeat("  ", level), len(a))
+	}
+
+	level++
+
+	for i := 0; i < len(a); i++ {
+		switch dav := da.(type) {
+		case []interface{}:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []string:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []float32:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []float64:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []int:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []int8:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []int16:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []int32:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []int64:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []uint:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []uint8:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []uint16:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []uint32:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		case []uint64:
+			err = processArrayValue(tmplContext, level, i, a[i], dav)
+		default:
+			err = fmt.Errorf("unsupported array type %T", dav)
+		}
+		if err != nil {
+			break
 		}
 	}
 	return
+}
+
+func processArrayValue[T any](tmplContext *BulkTemplateContext, level int, index int, a *fastjson.Value, da []T) (err error) {
+	arrayKey := fmt.Sprintf("[%d]", index)
+
+	if index < len(da) {
+		return tmplContext.processTemplateValue(level, a, arrayKey, da[index])
+	} else {
+		return tmplContext.processTemplateValue(level, a, arrayKey, nil)
+	}
 }
 
 // Decode an object
 func (tmplContext *BulkTemplateContext) walkObjectInto(level int, o *fastjson.Object, do map[string]interface{}) (err error) {
 	o.Visit(func(k []byte, v *fastjson.Value) {
 		key := string(k)
-		err := tmplContext.processTemplateValue(level+1, v, do, key, do[key])
+		err := tmplContext.processTemplateValue(level+1, v, key, do[key])
 		if tmplContext.binError == nil {
 			tmplContext.binError = err
 		}

@@ -3,7 +3,7 @@ module github.com/blues/note
 go 1.19
 
 require (
-	github.com/blues/note-go v1.7.1
+	github.com/blues/note-go v1.7.2
 	github.com/golang/snappy v0.0.4
 	github.com/google/open-location-code/go v0.0.0-20220120191843-cafb35c0d74d
 	github.com/google/uuid v1.3.0
@@ -17,7 +17,6 @@ require (
 	github.com/creack/goselect v0.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20220326011226-f1430873d8db // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20220216144756-c35f1ee13d7c // indirect

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/blues/note-go/note"
+	"github.com/blues/note-go/notehub"
 	"github.com/golang/snappy"
 )
 
@@ -53,7 +54,7 @@ func HubSetDeviceNotifications(fn GetNotificationFunc) {
 }
 
 // ReadFileFunc is the func to read a byte range from the named file
-type ReadFileFunc func(appUID string, filetype string, key string, offset int32, length int32, compress bool, getInfo bool) (body []byte, payload []byte, err error)
+type ReadFileFunc func(ctx context.Context, appUID string, filetype notehub.UploadType, key string, offset int32, length int32, compress bool) (body notehub.UploadMetadata, payload []byte, err error)
 
 var fnHubReadFile ReadFileFunc
 
@@ -1251,12 +1252,12 @@ func hubReadFile(ctx context.Context, session *HubSession, req notehubMessage, r
 	filename := req.NotefileIDs
 	offset := int32(req.Since)
 	length := int32(req.Until)
-	filetype := req.NoteID
+	filetype := notehub.ParseUploadType(req.NoteID)
 	returnUncompressedBinary := req.MaxChanges != 0
 
 	// Perform the read, and always do it compressed because the device firmware does a decompress.
 	getInfo := offset == 0
-	body, payload, err2 := fnHubReadFile(appUID, filetype, filename, offset, length, !returnUncompressedBinary, getInfo)
+	metadata, payload, err2 := fnHubReadFile(ctx, appUID, filetype, filename, offset, length, !returnUncompressedBinary)
 	if err2 != nil {
 		err = err2
 		box.Close(ctx)
@@ -1273,7 +1274,11 @@ func hubReadFile(ctx context.Context, session *HubSession, req notehubMessage, r
 	newNotefile := CreateNotefile(false)
 	var xnote note.Note
 	if getInfo {
-		xnote, err = note.CreateNote(body, payload)
+		if bodyEncoded, err2 := note.JSONMarshal(metadata); err2 != nil {
+			return err2
+		} else {
+			xnote, err = note.CreateNote(bodyEncoded, payload)
+		}
 	} else {
 		xnote, err = note.CreateNote(nil, payload)
 	}

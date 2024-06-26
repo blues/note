@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/blues/note-go/note"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,5 +81,80 @@ func TestBulkEncode(t *testing.T) {
 		fmt.Printf("  *** before ***\n%s\n", string(dataJSON))
 		fmt.Printf("  *** after ***\n%s\n", string(bodyJSON))
 	}
+}
 
+var bulkTests = []struct {
+	template string
+	data     map[string]any
+}{
+	{
+		template: `{"foo": "string"}`,
+		data:     map[string]any{"foo": "bar"},
+	},
+	{
+		template: `{"foo": 11}`,
+		data:     map[string]any{"foo": 2},
+	},
+	{
+		template: `{"foo": 14.1}`,
+		data:     map[string]any{"foo": 2.5},
+	},
+	{
+		template: `{"arr": [11, 11, 11, 11]}`,
+		data:     map[string]any{"arr": []int{1, 2, 3, 4}},
+	},
+	{
+		template: `{"arr": [14.1, 14.1, 14.1, 14.1]}`,
+		data:     map[string]any{"arr": []float32{1.1, 2.2, 3.3, 4.4}},
+	},
+	{
+		template: `{"map": {"val": 12}}`,
+		data:     map[string]any{"map": map[string]interface{}{"val": 2}},
+	},
+}
+
+func TestBulkEncodeDecode(t *testing.T) {
+	for _, test := range bulkTests {
+		expectedJSON, err := note.JSONMarshal(test.data)
+		require.NoError(t, err)
+
+		if verboseBulkTest {
+			fmt.Printf("Template:  %s\n", test.template)
+			fmt.Printf("Data Before: %v JSON: %s\n", test.data, expectedJSON)
+		}
+
+		templateBody := BulkBody{}
+		templateBody.NoteFormat = BulkNoteFormatFlexNano
+		templateBody.NoteTemplate = test.template
+		templateBodyJSON, err := note.JSONMarshal(templateBody)
+		require.NoError(t, err)
+
+		context, err := BulkEncodeTemplate(templateBodyJSON)
+		assert.NoError(t, err)
+
+		output, err := context.BulkEncodeNextEntry(test.data, []byte{}, 0, 0, "", "", false)
+		assert.NoError(t, err)
+
+		if verboseBulkTest {
+			fmt.Printf("Binary: %v\n", output)
+		}
+
+		context, err = BulkDecodeTemplate(templateBodyJSON, output)
+		assert.NoError(t, err)
+
+		body, payload, _, _, _, _, success := context.BulkDecodeNextEntry()
+		assert.Equal(t, true, success, "BulkDecodeNextEntry failed")
+		assert.Equal(t, "", string(payload))
+
+		// The contract appears to be that these should be equal from the JSON standpoint
+		// They are not equal from the Go standpoint because numbers are represented as json.Number rather than their native types
+		actualJSON, err := note.JSONMarshal(body)
+		assert.NoError(t, err)
+
+		if verboseBulkTest {
+			fmt.Printf("Data After: %v JSON: %s\n\n", body, actualJSON)
+		}
+
+		assert.JSONEq(t, string(expectedJSON), string(actualJSON), "JSON strings should match after encoding and decoding using template %s", test.template)
+	}
 }
