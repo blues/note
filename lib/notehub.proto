@@ -67,6 +67,8 @@ message NotehubPB {
     optional string Where = 57;
     optional int64 WhereWhen = 58;
     optional string HubPacketHandler = 59;
+    optional uint32 PowerSource = 60;
+    optional double PowerMahUsed = 61;
 
 }
 

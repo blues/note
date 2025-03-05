@@ -608,6 +608,13 @@ func (tmplContext *BulkTemplateContext) BulkDecodeNextEntry() (body map[string]i
 		}
 	}
 
+	// Perform special processing of the body to remove a field added in the
+	// Notecard repo commit c29ba90d94687a442f3ed4e170372fb98f2200c9 wherein
+	// lora templates needed to be unique.  This manifested itself as
+	// a field whose name is "_" being added to the template, which,
+	// if "noOmitEmpty", would actually show up to the user.
+	delete(body, "_")
+
 	// Exit if we'd encountered underrun
 	if tmplContext.BinUnderrun {
 		logDebug(context.Background(), "bin: bin underrun")

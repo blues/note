@@ -1,6 +1,6 @@
 github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d/go.mod h1:3eOhrUMpNV+6aFIbp5/iudMxNCF27Vw2OZgy4xEx0Fg=
-github.com/blues/note-go v1.7.2 h1:hasFsMNTnvyp5MPpnhqL46LC1tqzxQ5sGg+NOcJUV8E=
-github.com/blues/note-go v1.7.2/go.mod h1:GfslvbmFus7z05P1YykcbMedTKTuDNTf8ryBb1Qjq/4=
+github.com/blues/note-go v1.8.0 h1:7h9xVXREnFK0bT7xcYyXq19s1yPcFhZjrkerqFV0TLg=
+github.com/blues/note-go v1.8.0/go.mod h1:GfslvbmFus7z05P1YykcbMedTKTuDNTf8ryBb1Qjq/4=
 github.com/creack/goselect v0.1.2 h1:2DNy14+JPjRBgPzAd1thbQp4BSIihxcBf0IXhQXDRa0=
 github.com/creack/goselect v0.1.2/go.mod h1:a/NhLweNvqIYMuxcMOuWY516Cimucms3DglDzQP3hKY=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

@@ -12,12 +12,13 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Debugging details
 var (
 	synchronous     = true
-	debugEvent      = true
+	DebugEvent      = true
 	debugBox        = false
 	debugSync       = false
 	debugSyncMax    = false
@@ -31,7 +32,7 @@ var (
 )
 
 var vars = [...]*bool{
-	&debugEvent, &debugBox, &debugSync, &debugSyncMax, &debugCompress, &debugHubRequest, &debugRequest, &debugFile,
+	&DebugEvent, &debugBox, &debugSync, &debugSyncMax, &debugCompress, &debugHubRequest, &debugRequest, &debugFile,
 }
 
 var debugEnvInitialized = false
@@ -206,4 +207,35 @@ func loggerHandler() {
 		fmt.Println(output)
 		runtime.Gosched()
 	}
+}
+
+// Default timewarn period used for suppressing LogInfo entirely
+const LogPeriodSuppressSecs = 2
+
+// PeriodicInfo is a struct that enables information to be displayed only periodically,
+// for 'sampled' tracing purposes, rather than on a continuous basis
+type LogPeriod struct {
+	LastLog    time.Time
+	PeriodSecs int
+}
+
+// LogInfoPeriodReset ensures that the very next period log does a trace
+func LogInfoPeriodReset(period *LogPeriod) {
+	period.LastLog = time.Time{}
+}
+
+// LogInfoPeriodically writes an unstructured log message with the INFO level but only periodically
+func LogInfoPeriodically(ctx context.Context, period *LogPeriod, msg string, v ...interface{}) {
+	if !period.LastLog.IsZero() && time.Since(period.LastLog) < time.Duration(period.PeriodSecs)*time.Second {
+		return
+	}
+	logInfo(ctx, msg, v...)
+	period.LastLog = time.Now()
+}
+
+// LogInfoBumpTrace bumps a trace interval
+func LogInfoBumpTrace(prev *time.Time) (duration time.Duration) {
+	duration = time.Since(*prev)
+	*prev = time.Now()
+	return
 }

@@ -1,9 +1,9 @@
 module github.com/blues/note
 
-go 1.19
+go 1.22
 
 require (
-	github.com/blues/note-go v1.7.2
+	github.com/blues/note-go v1.8.0
 	github.com/golang/snappy v0.0.4
 	github.com/google/open-location-code/go v0.0.0-20220120191843-cafb35c0d74d
 	github.com/google/uuid v1.3.0

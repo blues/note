@@ -31,65 +31,67 @@ type NotehubPB struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Version                        *int64  `protobuf:"varint,1,opt,name=Version" json:"Version,omitempty"`
-	MessageType                    *string `protobuf:"bytes,2,opt,name=MessageType" json:"MessageType,omitempty"`
-	Error                          *string `protobuf:"bytes,3,opt,name=Error" json:"Error,omitempty"`
-	DeviceUID                      *string `protobuf:"bytes,4,opt,name=DeviceUID" json:"DeviceUID,omitempty"`
-	DeviceEndpointID               *string `protobuf:"bytes,5,opt,name=DeviceEndpointID" json:"DeviceEndpointID,omitempty"`
-	HubTimeNs                      *int64  `protobuf:"varint,6,opt,name=HubTimeNs" json:"HubTimeNs,omitempty"`
-	HubEndpointID                  *string `protobuf:"bytes,7,opt,name=HubEndpointID" json:"HubEndpointID,omitempty"`
-	HubSessionTicket               *string `protobuf:"bytes,8,opt,name=HubSessionTicket" json:"HubSessionTicket,omitempty"`
-	HubSessionHandler              *string `protobuf:"bytes,9,opt,name=HubSessionHandler" json:"HubSessionHandler,omitempty"`
-	HubSessionTicketExpiresTimeSec *int64  `protobuf:"varint,10,opt,name=HubSessionTicketExpiresTimeSec" json:"HubSessionTicketExpiresTimeSec,omitempty"`
-	NotefileID                     *string `protobuf:"bytes,11,opt,name=NotefileID" json:"NotefileID,omitempty"`
-	NotefileIDs                    *string `protobuf:"bytes,12,opt,name=NotefileIDs" json:"NotefileIDs,omitempty"`
-	Since                          *int64  `protobuf:"varint,13,opt,name=Since" json:"Since,omitempty"`
-	Until                          *int64  `protobuf:"varint,14,opt,name=Until" json:"Until,omitempty"`
-	MaxChanges                     *int64  `protobuf:"varint,15,opt,name=MaxChanges" json:"MaxChanges,omitempty"`
-	DeviceSN                       *string `protobuf:"bytes,16,opt,name=DeviceSN" json:"DeviceSN,omitempty"`
-	NoteID                         *string `protobuf:"bytes,17,opt,name=NoteID" json:"NoteID,omitempty"`
-	SessionIDPrev                  *int64  `protobuf:"varint,18,opt,name=SessionIDPrev" json:"SessionIDPrev,omitempty"`
-	SessionIDNext                  *int64  `protobuf:"varint,19,opt,name=SessionIDNext" json:"SessionIDNext,omitempty"`
-	SessionIDMismatch              *bool   `protobuf:"varint,20,opt,name=SessionIDMismatch" json:"SessionIDMismatch,omitempty"`
-	Bytes1                         *int64  `protobuf:"varint,21,opt,name=Bytes1" json:"Bytes1,omitempty"`
-	Bytes2                         *int64  `protobuf:"varint,22,opt,name=Bytes2" json:"Bytes2,omitempty"`
-	Bytes3                         *int64  `protobuf:"varint,23,opt,name=Bytes3" json:"Bytes3,omitempty"`
-	Bytes4                         *int64  `protobuf:"varint,24,opt,name=Bytes4" json:"Bytes4,omitempty"`
-	ProductUID                     *string `protobuf:"bytes,25,opt,name=ProductUID" json:"ProductUID,omitempty"`
-	UsageProvisioned               *int64  `protobuf:"varint,26,opt,name=UsageProvisioned" json:"UsageProvisioned,omitempty"`
-	UsageRcvdBytes                 *uint32 `protobuf:"varint,27,opt,name=UsageRcvdBytes" json:"UsageRcvdBytes,omitempty"`
-	UsageSentBytes                 *uint32 `protobuf:"varint,28,opt,name=UsageSentBytes" json:"UsageSentBytes,omitempty"`
-	UsageTCPSessions               *uint32 `protobuf:"varint,29,opt,name=UsageTCPSessions" json:"UsageTCPSessions,omitempty"`
-	UsageTLSSessions               *uint32 `protobuf:"varint,30,opt,name=UsageTLSSessions" json:"UsageTLSSessions,omitempty"`
-	UsageRcvdNotes                 *uint32 `protobuf:"varint,31,opt,name=UsageRcvdNotes" json:"UsageRcvdNotes,omitempty"`
-	UsageSentNotes                 *uint32 `protobuf:"varint,32,opt,name=UsageSentNotes" json:"UsageSentNotes,omitempty"`
-	CellID                         *string `protobuf:"bytes,33,opt,name=CellID" json:"CellID,omitempty"`
-	NotificationSession            *bool   `protobuf:"varint,34,opt,name=NotificationSession" json:"NotificationSession,omitempty"`
-	Voltage100                     *int32  `protobuf:"varint,35,opt,name=Voltage100" json:"Voltage100,omitempty"`
-	Temp100                        *int32  `protobuf:"varint,36,opt,name=Temp100" json:"Temp100,omitempty"`
-	ContinuousSession              *bool   `protobuf:"varint,37,opt,name=ContinuousSession" json:"ContinuousSession,omitempty"`
-	MotionSecs                     *int64  `protobuf:"varint,38,opt,name=MotionSecs" json:"MotionSecs,omitempty"`
-	MotionOrientation              *string `protobuf:"bytes,39,opt,name=MotionOrientation" json:"MotionOrientation,omitempty"`
-	SessionTrigger                 *string `protobuf:"bytes,40,opt,name=SessionTrigger" json:"SessionTrigger,omitempty"`
-	Voltage1000                    *int32  `protobuf:"varint,41,opt,name=Voltage1000" json:"Voltage1000,omitempty"`
-	Temp1000                       *int32  `protobuf:"varint,42,opt,name=Temp1000" json:"Temp1000,omitempty"`
-	HubSessionFactoryResetID       *string `protobuf:"bytes,43,opt,name=HubSessionFactoryResetID" json:"HubSessionFactoryResetID,omitempty"`
-	HighPowerSecsTotal             *uint32 `protobuf:"varint,44,opt,name=HighPowerSecsTotal" json:"HighPowerSecsTotal,omitempty"`
-	HighPowerSecsData              *uint32 `protobuf:"varint,45,opt,name=HighPowerSecsData" json:"HighPowerSecsData,omitempty"`
-	HighPowerSecsGPS               *uint32 `protobuf:"varint,46,opt,name=HighPowerSecsGPS" json:"HighPowerSecsGPS,omitempty"`
-	HighPowerCyclesTotal           *uint32 `protobuf:"varint,47,opt,name=HighPowerCyclesTotal" json:"HighPowerCyclesTotal,omitempty"`
-	HighPowerCyclesData            *uint32 `protobuf:"varint,48,opt,name=HighPowerCyclesData" json:"HighPowerCyclesData,omitempty"`
-	HighPowerCyclesGPS             *uint32 `protobuf:"varint,49,opt,name=HighPowerCyclesGPS" json:"HighPowerCyclesGPS,omitempty"`
-	DeviceSKU                      *string `protobuf:"bytes,50,opt,name=DeviceSKU" json:"DeviceSKU,omitempty"`
-	DeviceFirmware                 *int64  `protobuf:"varint,51,opt,name=DeviceFirmware" json:"DeviceFirmware,omitempty"`
-	DevicePIN                      *string `protobuf:"bytes,52,opt,name=DevicePIN" json:"DevicePIN,omitempty"`
-	DeviceOrderingCode             *string `protobuf:"bytes,53,opt,name=DeviceOrderingCode" json:"DeviceOrderingCode,omitempty"`
-	UsageRcvdBytesSecondary        *uint32 `protobuf:"varint,54,opt,name=UsageRcvdBytesSecondary" json:"UsageRcvdBytesSecondary,omitempty"`
-	UsageSentBytesSecondary        *uint32 `protobuf:"varint,55,opt,name=UsageSentBytesSecondary" json:"UsageSentBytesSecondary,omitempty"`
-	SuppressResponse               *bool   `protobuf:"varint,56,opt,name=SuppressResponse" json:"SuppressResponse,omitempty"`
-	Where                          *string `protobuf:"bytes,57,opt,name=Where" json:"Where,omitempty"`
-	WhereWhen                      *int64  `protobuf:"varint,58,opt,name=WhereWhen" json:"WhereWhen,omitempty"`
-	HubPacketHandler               *string `protobuf:"bytes,59,opt,name=HubPacketHandler" json:"HubPacketHandler,omitempty"`
+	Version                        *int64   `protobuf:"varint,1,opt,name=Version" json:"Version,omitempty"`
+	MessageType                    *string  `protobuf:"bytes,2,opt,name=MessageType" json:"MessageType,omitempty"`
+	Error                          *string  `protobuf:"bytes,3,opt,name=Error" json:"Error,omitempty"`
+	DeviceUID                      *string  `protobuf:"bytes,4,opt,name=DeviceUID" json:"DeviceUID,omitempty"`
+	DeviceEndpointID               *string  `protobuf:"bytes,5,opt,name=DeviceEndpointID" json:"DeviceEndpointID,omitempty"`
+	HubTimeNs                      *int64   `protobuf:"varint,6,opt,name=HubTimeNs" json:"HubTimeNs,omitempty"`
+	HubEndpointID                  *string  `protobuf:"bytes,7,opt,name=HubEndpointID" json:"HubEndpointID,omitempty"`
+	HubSessionTicket               *string  `protobuf:"bytes,8,opt,name=HubSessionTicket" json:"HubSessionTicket,omitempty"`
+	HubSessionHandler              *string  `protobuf:"bytes,9,opt,name=HubSessionHandler" json:"HubSessionHandler,omitempty"`
+	HubSessionTicketExpiresTimeSec *int64   `protobuf:"varint,10,opt,name=HubSessionTicketExpiresTimeSec" json:"HubSessionTicketExpiresTimeSec,omitempty"`
+	NotefileID                     *string  `protobuf:"bytes,11,opt,name=NotefileID" json:"NotefileID,omitempty"`
+	NotefileIDs                    *string  `protobuf:"bytes,12,opt,name=NotefileIDs" json:"NotefileIDs,omitempty"`
+	Since                          *int64   `protobuf:"varint,13,opt,name=Since" json:"Since,omitempty"`
+	Until                          *int64   `protobuf:"varint,14,opt,name=Until" json:"Until,omitempty"`
+	MaxChanges                     *int64   `protobuf:"varint,15,opt,name=MaxChanges" json:"MaxChanges,omitempty"`
+	DeviceSN                       *string  `protobuf:"bytes,16,opt,name=DeviceSN" json:"DeviceSN,omitempty"`
+	NoteID                         *string  `protobuf:"bytes,17,opt,name=NoteID" json:"NoteID,omitempty"`
+	SessionIDPrev                  *int64   `protobuf:"varint,18,opt,name=SessionIDPrev" json:"SessionIDPrev,omitempty"`
+	SessionIDNext                  *int64   `protobuf:"varint,19,opt,name=SessionIDNext" json:"SessionIDNext,omitempty"`
+	SessionIDMismatch              *bool    `protobuf:"varint,20,opt,name=SessionIDMismatch" json:"SessionIDMismatch,omitempty"`
+	Bytes1                         *int64   `protobuf:"varint,21,opt,name=Bytes1" json:"Bytes1,omitempty"`
+	Bytes2                         *int64   `protobuf:"varint,22,opt,name=Bytes2" json:"Bytes2,omitempty"`
+	Bytes3                         *int64   `protobuf:"varint,23,opt,name=Bytes3" json:"Bytes3,omitempty"`
+	Bytes4                         *int64   `protobuf:"varint,24,opt,name=Bytes4" json:"Bytes4,omitempty"`
+	ProductUID                     *string  `protobuf:"bytes,25,opt,name=ProductUID" json:"ProductUID,omitempty"`
+	UsageProvisioned               *int64   `protobuf:"varint,26,opt,name=UsageProvisioned" json:"UsageProvisioned,omitempty"`
+	UsageRcvdBytes                 *uint32  `protobuf:"varint,27,opt,name=UsageRcvdBytes" json:"UsageRcvdBytes,omitempty"`
+	UsageSentBytes                 *uint32  `protobuf:"varint,28,opt,name=UsageSentBytes" json:"UsageSentBytes,omitempty"`
+	UsageTCPSessions               *uint32  `protobuf:"varint,29,opt,name=UsageTCPSessions" json:"UsageTCPSessions,omitempty"`
+	UsageTLSSessions               *uint32  `protobuf:"varint,30,opt,name=UsageTLSSessions" json:"UsageTLSSessions,omitempty"`
+	UsageRcvdNotes                 *uint32  `protobuf:"varint,31,opt,name=UsageRcvdNotes" json:"UsageRcvdNotes,omitempty"`
+	UsageSentNotes                 *uint32  `protobuf:"varint,32,opt,name=UsageSentNotes" json:"UsageSentNotes,omitempty"`
+	CellID                         *string  `protobuf:"bytes,33,opt,name=CellID" json:"CellID,omitempty"`
+	NotificationSession            *bool    `protobuf:"varint,34,opt,name=NotificationSession" json:"NotificationSession,omitempty"`
+	Voltage100                     *int32   `protobuf:"varint,35,opt,name=Voltage100" json:"Voltage100,omitempty"`
+	Temp100                        *int32   `protobuf:"varint,36,opt,name=Temp100" json:"Temp100,omitempty"`
+	ContinuousSession              *bool    `protobuf:"varint,37,opt,name=ContinuousSession" json:"ContinuousSession,omitempty"`
+	MotionSecs                     *int64   `protobuf:"varint,38,opt,name=MotionSecs" json:"MotionSecs,omitempty"`
+	MotionOrientation              *string  `protobuf:"bytes,39,opt,name=MotionOrientation" json:"MotionOrientation,omitempty"`
+	SessionTrigger                 *string  `protobuf:"bytes,40,opt,name=SessionTrigger" json:"SessionTrigger,omitempty"`
+	Voltage1000                    *int32   `protobuf:"varint,41,opt,name=Voltage1000" json:"Voltage1000,omitempty"`
+	Temp1000                       *int32   `protobuf:"varint,42,opt,name=Temp1000" json:"Temp1000,omitempty"`
+	HubSessionFactoryResetID       *string  `protobuf:"bytes,43,opt,name=HubSessionFactoryResetID" json:"HubSessionFactoryResetID,omitempty"`
+	HighPowerSecsTotal             *uint32  `protobuf:"varint,44,opt,name=HighPowerSecsTotal" json:"HighPowerSecsTotal,omitempty"`
+	HighPowerSecsData              *uint32  `protobuf:"varint,45,opt,name=HighPowerSecsData" json:"HighPowerSecsData,omitempty"`
+	HighPowerSecsGPS               *uint32  `protobuf:"varint,46,opt,name=HighPowerSecsGPS" json:"HighPowerSecsGPS,omitempty"`
+	HighPowerCyclesTotal           *uint32  `protobuf:"varint,47,opt,name=HighPowerCyclesTotal" json:"HighPowerCyclesTotal,omitempty"`
+	HighPowerCyclesData            *uint32  `protobuf:"varint,48,opt,name=HighPowerCyclesData" json:"HighPowerCyclesData,omitempty"`
+	HighPowerCyclesGPS             *uint32  `protobuf:"varint,49,opt,name=HighPowerCyclesGPS" json:"HighPowerCyclesGPS,omitempty"`
+	DeviceSKU                      *string  `protobuf:"bytes,50,opt,name=DeviceSKU" json:"DeviceSKU,omitempty"`
+	DeviceFirmware                 *int64   `protobuf:"varint,51,opt,name=DeviceFirmware" json:"DeviceFirmware,omitempty"`
+	DevicePIN                      *string  `protobuf:"bytes,52,opt,name=DevicePIN" json:"DevicePIN,omitempty"`
+	DeviceOrderingCode             *string  `protobuf:"bytes,53,opt,name=DeviceOrderingCode" json:"DeviceOrderingCode,omitempty"`
+	UsageRcvdBytesSecondary        *uint32  `protobuf:"varint,54,opt,name=UsageRcvdBytesSecondary" json:"UsageRcvdBytesSecondary,omitempty"`
+	UsageSentBytesSecondary        *uint32  `protobuf:"varint,55,opt,name=UsageSentBytesSecondary" json:"UsageSentBytesSecondary,omitempty"`
+	SuppressResponse               *bool    `protobuf:"varint,56,opt,name=SuppressResponse" json:"SuppressResponse,omitempty"`
+	Where                          *string  `protobuf:"bytes,57,opt,name=Where" json:"Where,omitempty"`
+	WhereWhen                      *int64   `protobuf:"varint,58,opt,name=WhereWhen" json:"WhereWhen,omitempty"`
+	HubPacketHandler               *string  `protobuf:"bytes,59,opt,name=HubPacketHandler" json:"HubPacketHandler,omitempty"`
+	PowerSource                    *uint32  `protobuf:"varint,60,opt,name=PowerSource" json:"PowerSource,omitempty"`
+	PowerMahUsed                   *float64 `protobuf:"fixed64,61,opt,name=PowerMahUsed" json:"PowerMahUsed,omitempty"`
 }
 
 func (x *NotehubPB) Reset() {
@@ -537,11 +539,25 @@ func (x *NotehubPB) GetHubPacketHandler() string {
 	return ""
 }
 
+func (x *NotehubPB) GetPowerSource() uint32 {
+	if x != nil && x.PowerSource != nil {
+		return *x.PowerSource
+	}
+	return 0
+}
+
+func (x *NotehubPB) GetPowerMahUsed() float64 {
+	if x != nil && x.PowerMahUsed != nil {
+		return *x.PowerMahUsed
+	}
+	return 0
+}
+
 var File_notehub_proto protoreflect.FileDescriptor
 
 var file_notehub_proto_rawDesc = []byte{
 	0x0a, 0x0d, 0x6e, 0x6f, 0x74, 0x65, 0x68, 0x75, 0x62, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x12,
-	0x07, 0x6e, 0x6f, 0x74, 0x65, 0x6c, 0x69, 0x62, 0x22, 0xc3, 0x11, 0x0a, 0x09, 0x4e, 0x6f, 0x74,
+	0x07, 0x6e, 0x6f, 0x74, 0x65, 0x6c, 0x69, 0x62, 0x22, 0x89, 0x12, 0x0a, 0x09, 0x4e, 0x6f, 0x74,
 	0x65, 0x68, 0x75, 0x62, 0x50, 0x42, 0x12, 0x18, 0x0a, 0x07, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f,
 	0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x03, 0x52, 0x07, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e,
 	0x12, 0x20, 0x0a, 0x0b, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x54, 0x79, 0x70, 0x65, 0x18,
@@ -681,7 +697,12 @@ var file_notehub_proto_rawDesc = []byte{
 	0x6e, 0x18, 0x3a, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x57, 0x68, 0x65, 0x72, 0x65, 0x57, 0x68,
 	0x65, 0x6e, 0x12, 0x2a, 0x0a, 0x10, 0x48, 0x75, 0x62, 0x50, 0x61, 0x63, 0x6b, 0x65, 0x74, 0x48,
 	0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72, 0x18, 0x3b, 0x20, 0x01, 0x28, 0x09, 0x52, 0x10, 0x48, 0x75,
-	0x62, 0x50, 0x61, 0x63, 0x6b, 0x65, 0x74, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72,
+	0x62, 0x50, 0x61, 0x63, 0x6b, 0x65, 0x74, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72, 0x12, 0x20,
+	0x0a, 0x0b, 0x50, 0x6f, 0x77, 0x65, 0x72, 0x53, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x18, 0x3c, 0x20,
+	0x01, 0x28, 0x0d, 0x52, 0x0b, 0x50, 0x6f, 0x77, 0x65, 0x72, 0x53, 0x6f, 0x75, 0x72, 0x63, 0x65,
+	0x12, 0x22, 0x0a, 0x0c, 0x50, 0x6f, 0x77, 0x65, 0x72, 0x4d, 0x61, 0x68, 0x55, 0x73, 0x65, 0x64,
+	0x18, 0x3d, 0x20, 0x01, 0x28, 0x01, 0x52, 0x0c, 0x50, 0x6f, 0x77, 0x65, 0x72, 0x4d, 0x61, 0x68,
+	0x55, 0x73, 0x65, 0x64,
 }
 
 var (
