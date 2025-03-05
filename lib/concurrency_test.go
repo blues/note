@@ -87,7 +87,7 @@ func TestConcurrency(t *testing.T) {
 
 }
 
-func parallelTest(t *testing.T, testName string, summarizeWork bool, workInstances int, workFn func(testid string) bool) {
+func parallelTest(t *testing.T, testName string, summarizeWork bool, workInstances int, workFn func(ctx context.Context, testid string) bool) {
 	ctx := context.Background()
 
 	// Start the tests and notify the caller that we've started them
@@ -130,7 +130,7 @@ func parallelTest(t *testing.T, testName string, summarizeWork bool, workInstanc
 }
 
 // Perform work in parallel
-func parallelWork(workFn func(testid string) bool, summarizeWork bool, pActive *int, iterations *uint64, errors *uint64) {
+func parallelWork(workFn func(ctx context.Context, testid string) bool, summarizeWork bool, pActive *int, iterations *uint64, errors *uint64) {
 	ctx := context.Background()
 
 	// Notify the callers that we've started, and wait for 'go'
@@ -147,7 +147,7 @@ func parallelWork(workFn func(testid string) bool, summarizeWork bool, pActive *
 	localIterations := 0
 	testid := fmt.Sprintf("concurrency_test_%04d", id)
 	for !stopTests {
-		if !workFn(testid) {
+		if !workFn(ctx, testid) {
 			atomic.AddUint64(errors, 1)
 		} else {
 			atomic.AddUint64(iterations, 1)
@@ -168,9 +168,7 @@ func parallelWork(workFn func(testid string) bool, summarizeWork bool, pActive *
 }
 
 // Perform a single notebox test
-func testNotebox(testid string) bool {
-	ctx := context.Background()
-
+func testNotebox(ctx context.Context, testid string) bool {
 	box, err := OpenEndpointNotebox(ctx, "", FileStorageObject(testid), true)
 	if err != nil {
 		logDebug(ctx, "boxOpen: %s", err)
@@ -207,7 +205,7 @@ func testNotebox(testid string) bool {
 		}
 
 		for i := 0; i < 100; i++ {
-			err := nf.DeleteNote("", fmt.Sprintf("note%d", i))
+			err := nf.DeleteNote(ctx, "", fmt.Sprintf("note%d", i))
 			if err != nil {
 				return false
 			}
@@ -245,7 +243,7 @@ func testNotebox(testid string) bool {
 }
 
 // Perform a single notefile test
-func testNotefile(testid string) bool {
+func testNotefile(ctx context.Context, testid string) bool {
 
 	nf := CreateNotefile(false)
 	for i := 0; i < 100; i++ {
@@ -253,13 +251,13 @@ func testNotefile(testid string) bool {
 		if err != nil {
 			return false
 		}
-		_, err = nf.AddNote("", fmt.Sprintf("note%d", i), n)
+		_, err = nf.AddNote(ctx, "", fmt.Sprintf("note%d", i), n)
 		if err != nil {
 			return false
 		}
 	}
 	for i := 0; i < 100; i++ {
-		err := nf.DeleteNote("", fmt.Sprintf("note%d", i))
+		err := nf.DeleteNote(ctx, "", fmt.Sprintf("note%d", i))
 		if err != nil {
 			return false
 		}
@@ -267,7 +265,7 @@ func testNotefile(testid string) bool {
 		if err != nil {
 			return false
 		}
-		_, err = nf.AddNote("", "", n)
+		_, err = nf.AddNote(ctx, "", "", n)
 		if err != nil {
 			return false
 		}

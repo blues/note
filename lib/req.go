@@ -259,9 +259,9 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			rsp.Err = "no notefile specified"
 			break
 		}
-		isQueue, toHub, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
+		isQueue, _, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
 		if req.NoteID == "" {
-			if !isQueue || !toHub {
+			if !isQueue {
 				rsp.Err = "no note ID specified"
 				break
 			}
@@ -279,8 +279,10 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 				break
 			}
 		}
-		// Handle queues by getting the LRU note
-		if isQueue && toHub && req.NoteID == "" {
+		// Handle queues by getting the LRU note.  Note that we allow either inbound
+		// or outbound queues to be accessed this way via API, explicitly to allow
+		// the API to be used to manage queues in either direction.
+		if isQueue && req.NoteID == "" {
 			openfile, file, err2 := box.OpenNotefile(ctx, req.NotefileID)
 			if err2 != nil {
 				rsp.Err = fmt.Sprintf("%s", err2)
@@ -352,6 +354,14 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		}
 		if req.Pending {
 			req.TrackerID = "^"
+		}
+
+		// Special way, for use by support, to get a list of all notefiles
+		// and their info such as templates.
+		if req.Full {
+			allNotefiles := box.NoteboxNotefileDesc()
+			rsp.FileDesc = &allNotefiles
+			break
 		}
 
 		// If no tracker, generate the entire list of notefiles
@@ -577,13 +587,14 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 				payload := xnote.GetPayload()
 				info.Payload = &payload
 			}
+			info.When = xnote.When()
 
 			// Add it to the list to be returned
 			infolist[noteIDs[i]] = info
 
 			// Delete it as a side-effect, if desired
 			if req.Delete {
-				_ = file.DeleteNote(endpointID, noteIDs[i])
+				_ = file.DeleteNote(ctx, endpointID, noteIDs[i])
 			}
 
 		}

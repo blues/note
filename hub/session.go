@@ -11,7 +11,6 @@ import (
 	"net"
 
 	notelib "github.com/blues/note/lib"
-	"github.com/google/uuid"
 )
 
 // Process requests for the duration of a session being open
@@ -28,7 +27,7 @@ func sessionHandler(connSession net.Conn, secure bool) {
 	}
 
 	// Always start with a blank, inactive Session Context
-	sessionContext := notelib.NewHubSession(uuid.New().String(), sessionSource, secure)
+	sessionContext := notelib.NewHubSession(sessionSource, secure)
 
 	// Set up golang context with session context stored within
 	ctx := context.Background()
@@ -39,7 +38,7 @@ func sessionHandler(connSession net.Conn, secure bool) {
 		firstTransaction := sessionContext.Transactions == 0
 
 		// Extract a request from the wire, and exit if error
-		_, request, err = notelib.WireReadRequest(connSession, true)
+		_, request, err = notelib.WireReadRequest(ctx, connSession, true)
 		if err != nil {
 			if !notelib.ErrorContains(err, "{closed}") {
 				fmt.Printf("session: error reading request: %s\n", err)

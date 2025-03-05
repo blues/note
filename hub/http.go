@@ -37,7 +37,7 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 	reqJSON, err = io.ReadAll(httpReq.Body)
 	if err != nil {
 		err = fmt.Errorf("please supply a JSON request in the HTTP body")
-		io.WriteString(httpRsp, string(notelib.ErrorResponse(err)))
+		httpRsp.Write(notelib.ErrorResponse(err))
 		return
 	}
 
@@ -64,7 +64,7 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 	// Get the hub endpoint ID and storage object
 	var hubEndpointID, deviceStorageObject string
 	if err == nil {
-		_, hubEndpointID, _, deviceStorageObject, err = notelib.HubDiscover(deviceUID, "", device.ProductUID)
+		hubEndpointID, _, deviceStorageObject, err = notelib.HubDiscover(deviceUID, "", device.ProductUID, appUID)
 	}
 
 	// Process the request
@@ -73,7 +73,7 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 		var box *notelib.Notebox
 		box, err = notelib.OpenEndpointNotebox(ctx, hubEndpointID, deviceStorageObject, false)
 		if err == nil {
-			box.SetEventInfo(deviceUID, device.DeviceSN, device.ProductUID, appUID, notehubEvent, nil)
+			box.SetEventInfo(deviceUID, device.DeviceSN, device.ProductUID, appUID, "api:http", notehubEvent, nil)
 			rspJSON = box.Request(ctx, hubEndpointID, reqJSON)
 			box.Close(ctx)
 		}

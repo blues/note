@@ -87,7 +87,14 @@ type Notebox struct {
 	defaultEventDeviceSN   string
 	defaultEventProductUID string
 	defaultEventAppUID     string
+	defaultEventTransport  string
 	// For HTTP access control
 	clientHTTPReq *http.Request
 	clientHTTPRsp http.ResponseWriter
 }
+
+// If it takes more than 20 seconds, we are at risk of hitting the 30-second
+// transaction timeout, which could cause massive batches of notes to be
+// re-sent and re-enqueued.  Make sure this is flagged as an error so that
+// the code or operational infrastructure can be fixed.
+const transactionErrorDuration = (20 * time.Second)

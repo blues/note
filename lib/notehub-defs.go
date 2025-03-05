@@ -7,10 +7,13 @@ package notelib
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"time"
 
 	"github.com/blues/note-go/note"
+	"github.com/google/uuid"
 )
 
 // HTTPUserAgent is the HTTP user agent for all our uses of HTTP
@@ -45,6 +48,9 @@ const (
 	msgSignal                      = "s"
 	msgCheckpoint                  = "Z"
 )
+
+// Msg type prefix; if present, we suppress response
+const msgSuppressResponsePrefix = "-"
 
 // nf is the native format of these structures
 // Note that the field names in this structure must be unique within
@@ -100,52 +106,54 @@ type notehubMessage struct {
 	// no matter what MessageType the transaction happens to be.
 	// THESE FIELDS SHOULD NEVER BE OVERLOADED BY RPC TRANSACTIONS FOR
 	// THEIR OWN PER-TRANSACTION DATA TRANSFER REQUIREMENTS!!!
-	Version                        uint32 `json:"a,omitempty"`
-	DeviceUID                      string `json:"d,omitempty"`
-	DeviceEndpointID               string `json:"e,omitempty"`
-	HubTimeNs                      int64  `json:"f,omitempty"`
-	HubEndpointID                  string `json:"g,omitempty"`
-	HubSessionHandler              string `json:"h,omitempty"`
-	HubSessionFactoryResetID       string `json:"i,omitempty"`
-	HubSessionTicket               string `json:"j,omitempty"`
-	HubSessionTicketExpiresTimeSec int64  `json:"k,omitempty"`
-	SessionIDPrev                  int64  `json:"r,omitempty"`
-	SessionIDNext                  int64  `json:"s,omitempty"`
-	SessionIDMismatch              bool   `json:"t,omitempty"`
-	ProductUID                     string `json:"u,omitempty"`
-	UsageProvisioned               int64  `json:"v,omitempty"`
-	UsageRcvdBytes                 uint32 `json:"w,omitempty"`
-	UsageSentBytes                 uint32 `json:"x,omitempty"`
-	UsageTCPSessions               uint32 `json:"y,omitempty"`
-	UsageTLSSessions               uint32 `json:"z,omitempty"`
-	UsageRcvdNotes                 uint32 `json:"A,omitempty"`
-	UsageSentNotes                 uint32 `json:"B,omitempty"`
-	HighPowerSecsTotal             uint32 `json:"C,omitempty"`
-	HighPowerSecsData              uint32 `json:"D,omitempty"`
-	HighPowerSecsGPS               uint32 `json:"E,omitempty"`
-	HighPowerCyclesTotal           uint32 `json:"F,omitempty"`
-	HighPowerCyclesData            uint32 `json:"G,omitempty"`
-	HighPowerCyclesGPS             uint32 `json:"H,omitempty"`
-	DeviceSN                       string `json:"I,omitempty"`
-	CellID                         string `json:"J,omitempty"`
-	NotificationSession            bool   `json:"K,omitempty"`
-	Voltage100                     int32  `json:"L,omitempty"`
-	Temp100                        int32  `json:"M,omitempty"`
-	Voltage1000                    int32  `json:"N,omitempty"`
-	Temp1000                       int32  `json:"O,omitempty"`
-	ContinuousSession              bool   `json:"P,omitempty"`
-	MotionSecs                     int64  `json:"Q,omitempty"`
-	MotionOrientation              string `json:"R,omitempty"`
-	SessionTrigger                 string `json:"S,omitempty"`
-	DeviceSKU                      string `json:"T,omitempty"`
-	DeviceFirmware                 int64  `json:"U,omitempty"`
-	DevicePIN                      string `json:"V,omitempty"`
-	DeviceOrderingCode             string `json:"W,omitempty"`
-	UsageRcvdBytesSecondary        uint32 `json:"X,omitempty"`
-	UsageSentBytesSecondary        uint32 `json:"Y,omitempty"`
-	Where                          string `json:"wh,omitempty"`
-	WhereWhen                      int64  `json:"ww,omitempty"`
-	HubPacketHandler               string `json:"ph,omitempty"`
+	Version                        uint32  `json:"a,omitempty"`
+	DeviceUID                      string  `json:"d,omitempty"`
+	DeviceEndpointID               string  `json:"e,omitempty"`
+	HubTimeNs                      int64   `json:"f,omitempty"`
+	HubEndpointID                  string  `json:"g,omitempty"`
+	HubSessionHandler              string  `json:"h,omitempty"`
+	HubSessionFactoryResetID       string  `json:"i,omitempty"`
+	HubSessionTicket               string  `json:"j,omitempty"`
+	HubSessionTicketExpiresTimeSec int64   `json:"k,omitempty"`
+	SessionIDPrev                  int64   `json:"r,omitempty"`
+	SessionIDNext                  int64   `json:"s,omitempty"`
+	SessionIDMismatch              bool    `json:"t,omitempty"`
+	ProductUID                     string  `json:"u,omitempty"`
+	UsageProvisioned               int64   `json:"v,omitempty"`
+	UsageRcvdBytes                 uint32  `json:"w,omitempty"`
+	UsageSentBytes                 uint32  `json:"x,omitempty"`
+	UsageTCPSessions               uint32  `json:"y,omitempty"`
+	UsageTLSSessions               uint32  `json:"z,omitempty"`
+	UsageRcvdNotes                 uint32  `json:"A,omitempty"`
+	UsageSentNotes                 uint32  `json:"B,omitempty"`
+	HighPowerSecsTotal             uint32  `json:"C,omitempty"`
+	HighPowerSecsData              uint32  `json:"D,omitempty"`
+	HighPowerSecsGPS               uint32  `json:"E,omitempty"`
+	HighPowerCyclesTotal           uint32  `json:"F,omitempty"`
+	HighPowerCyclesData            uint32  `json:"G,omitempty"`
+	HighPowerCyclesGPS             uint32  `json:"H,omitempty"`
+	DeviceSN                       string  `json:"I,omitempty"`
+	CellID                         string  `json:"J,omitempty"`
+	NotificationSession            bool    `json:"K,omitempty"`
+	Voltage100                     int32   `json:"L,omitempty"`
+	Temp100                        int32   `json:"M,omitempty"`
+	Voltage1000                    int32   `json:"N,omitempty"`
+	Temp1000                       int32   `json:"O,omitempty"`
+	ContinuousSession              bool    `json:"P,omitempty"`
+	MotionSecs                     int64   `json:"Q,omitempty"`
+	MotionOrientation              string  `json:"R,omitempty"`
+	SessionTrigger                 string  `json:"S,omitempty"`
+	DeviceSKU                      string  `json:"T,omitempty"`
+	DeviceFirmware                 int64   `json:"U,omitempty"`
+	DevicePIN                      string  `json:"V,omitempty"`
+	DeviceOrderingCode             string  `json:"W,omitempty"`
+	UsageRcvdBytesSecondary        uint32  `json:"X,omitempty"`
+	UsageSentBytesSecondary        uint32  `json:"Y,omitempty"`
+	Where                          string  `json:"wh,omitempty"`
+	WhereWhen                      int64   `json:"ww,omitempty"`
+	HubPacketHandler               string  `json:"ph,omitempty"`
+	PowerSource                    uint32  `json:"ps,omitempty"`
+	PowerMahUsed                   float64 `json:"pm,omitempty"`
 
 	// These fields are used within the handling of MessageType to mean things
 	// that are specific to the transaction type specified in MessageType.  Note
@@ -168,6 +176,10 @@ type notehubMessage struct {
 	*nf              `json:",omitempty"`
 	*cf              `json:",omitempty"`
 }
+
+const NotecardPowerCharging = uint32(0x00000001)
+const NotecardPowerUsb = uint32(0x00000002)
+const NotecardPowerPrimary = uint32(0x00000004)
 
 type HubSession struct {
 	// These is all the fields sent from the notecard and decoded in wire.go
@@ -201,23 +213,39 @@ type HubSession struct {
 	Hub interface{}
 }
 
-func NewHubSession(sessionUID, handlerAddr string, secure bool) HubSession {
+// NewUUID returns a new UUID
+func NewUUID() (randstr string) {
+	return uuid.New().String()
+}
+
+// NewUNameFromUID returns a name from a UUID
+func NameFromUUID(uid string) (name string) {
+	hash := sha256.Sum256([]byte(uid))
+	uint32Hash := binary.BigEndian.Uint32(hash[:4])
+	return note.WordsFromNumber(uint32Hash)
+}
+
+func InitDeviceSession(sess *note.DeviceSession, handlerAddr string, secure bool) time.Time {
 	now := time.Now()
-	deviceSession := note.DeviceSession{}
-	deviceSession.SessionUID = sessionUID
-	deviceSession.Handler = handlerAddr
-	deviceSession.Period().Since = now.Unix()
-	deviceSession.TLSSession = secure
-
+	sess.SessionUID = NewUUID()
+	sess.SessionBegan = now.UTC().Unix()
+	sess.Period().Since = sess.SessionBegan
+	sess.TLSSession = secure
+	sess.Handler = handlerAddr
 	if secure {
-		deviceSession.Period().TLSSessions++
+		sess.Period().TLSSessions++
 	} else {
-		deviceSession.Period().TCPSessions++
+		sess.Period().TCPSessions++
 	}
+	return now
+}
 
+func NewHubSession(handlerAddr string, secure bool) HubSession {
+	deviceSession := note.DeviceSession{}
+	sessionBegan := InitDeviceSession(&deviceSession, handlerAddr, secure)
 	return HubSession{
 		Session:      deviceSession,
-		SessionStart: now,
+		SessionStart: sessionBegan,
 	}
 }
 

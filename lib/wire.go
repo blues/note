@@ -735,6 +735,12 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.Temp1000 != 0 {
 		pb.Temp1000 = &msg.Temp1000
 	}
+	if msg.PowerSource != 0 {
+		pb.PowerSource = &msg.PowerSource
+	}
+	if msg.PowerMahUsed != 0 {
+		pb.PowerMahUsed = &msg.PowerMahUsed
+	}
 	if msg.CellID != "" {
 		pb.CellID = &msg.CellID
 	}
@@ -957,40 +963,40 @@ func u32min(x, y uint32) uint32 {
 }
 
 // WireBarsFromSession extracts device's perception of the number of bars of signal from a session
-func WireBarsFromSession(session *HubSession) (rat string, bars uint32) {
+func WireBarsFromSession(session *note.DeviceSession) (rat string, bars uint32) {
 	// Return the rat for the session
-	rat = session.Session.Rat
+	rat = session.Rat
 
 	// Start by assuming great coverage
 	bars = 4
 
 	// Handle GSM OR handle LTE at the state when RSRQ can't be computed
-	if session.Session.Rsrq == 0 {
-		if session.Session.Rssi < -70 {
+	if session.Rsrq == 0 {
+		if session.Rssi < -70 {
 			bars = 3
 		}
-		if session.Session.Rssi < -85 {
+		if session.Rssi < -85 {
 			bars = 2
 		}
-		if session.Session.Rssi < -100 {
+		if session.Rssi < -100 {
 			bars = 1
 		}
 		return
 	}
 
 	// RSRP is an integer indicating the reference signal received power in dBm
-	if session.Session.Rsrp < -80 {
+	if session.Rsrp < -80 {
 		bars = u32min(bars, 3)
 	}
-	if session.Session.Rsrp < -90 {
+	if session.Rsrp < -90 {
 		bars = u32min(bars, 2)
 	}
-	if session.Session.Rsrp < -100 {
+	if session.Rsrp < -100 {
 		bars = u32min(bars, 1)
 	}
 	// SINR is an integer indicating the signal to interference plus noise ratio.
 	// The logarithmic values (0-250) are in 1/5th of a dB, ranging from -20 to +30db
-	sinr := -20 + (session.Session.Sinr * 5)
+	sinr := -20 + (session.Sinr * 5)
 	if sinr < 20 {
 		bars = u32min(bars, 3)
 	}
@@ -1003,13 +1009,13 @@ func WireBarsFromSession(session *HubSession) (rat string, bars uint32) {
 	// RSRQ is an integer indicating the reference signal received quality (RSRQ) in dB,
 	// which is computed by the formula RSRQ = N*(RSRP/RSSI), where N is the number of
 	// Resource Blocks of the E-UTRA carrier RSSI
-	if session.Session.Rsrq < -10 {
+	if session.Rsrq < -10 {
 		bars = u32min(bars, 3)
 	}
-	if session.Session.Rsrq < -15 {
+	if session.Rsrq < -15 {
 		bars = u32min(bars, 2)
 	}
-	if session.Session.Rsrq < -20 {
+	if session.Rsrq < -20 {
 		bars = u32min(bars, 1)
 	}
 
@@ -1067,9 +1073,13 @@ func WireExtractSessionContext(wire []byte, session *HubSession) (suppressRespon
 	if req.Temp1000 != 0 {
 		session.Session.Temp = float64(req.Temp1000) / 1000
 	}
+	session.Session.PowerCharging = (req.PowerSource & NotecardPowerCharging) != 0
+	session.Session.PowerUsb = (req.PowerSource & NotecardPowerUsb) != 0
+	session.Session.PowerPrimary = (req.PowerSource & NotecardPowerPrimary) != 0
+	session.Session.PowerMahUsed = req.PowerMahUsed
 	session.Session.Moved = req.MotionSecs
 	session.Session.Orientation = req.MotionOrientation
-	session.Session.Trigger = req.SessionTrigger
+	session.Session.WhySessionOpened = req.SessionTrigger
 	session.Notification = req.NotificationSession
 	session.Session.ContinuousSession = req.ContinuousSession
 	if req.MessageType == msgDiscover {
@@ -1155,25 +1165,77 @@ func WireExtractSessionContext(wire []byte, session *HubSession) (suppressRespon
 		session.Session.Iccid = str1
 		session.Session.Apn = str2
 	}
+
+	// Assign the base transport type
+	session.Session.Transport = rat
+	switch session.Session.Transport {
+	case "soft":
+		session.Session.Transport = "simulator"
+	case "gsm":
+		session.Session.Transport = "cell:gsm"
+	case "nbiot":
+		session.Session.Transport = "cell:nbiot"
+	case "cdma":
+		session.Session.Transport = "cell:cdma"
+	case "umts":
+		session.Session.Transport = "cell:umts"
+	case "emtc":
+		session.Session.Transport = "cell:emtc"
+	case "lte":
+		session.Session.Transport = "cell:lte"
+	}
+
+	// Fix up bearer for old notecards that accidentally zero'ed out
+	// the bearer field rather than setting it to UNKNOWN (-1)
+	if bearer == notecard.NetworkBearerGsm && rat != "gsm" {
+		bearer = notecard.NetworkBearerUnknown
+	}
+
+	// Other cleanups based on bearer
 	switch bearer {
 	case notecard.NetworkBearerGsm:
 		session.Session.Bearer = "GSM"
+		if rat != "gsm" {
+			session.Session.Transport += ":gsm"
+		}
 	case notecard.NetworkBearerTdScdma:
 		session.Session.Bearer = "TD-SCDMA"
+		session.Session.Transport += ":td-scdma"
 	case notecard.NetworkBearerWcdma:
 		session.Session.Bearer = "WCDMA"
+		session.Session.Transport += ":wcdma"
 	case notecard.NetworkBearerCdma2000:
 		session.Session.Bearer = "CDMA2000"
+		session.Session.Transport += ":cdma2000"
 	case notecard.NetworkBearerWiMax:
 		session.Session.Bearer = "WIMAX"
+		session.Session.Transport += ":wimax"
 	case notecard.NetworkBearerLteTdd:
 		session.Session.Bearer = "LTE TDD"
+		if rat == "lte" {
+			session.Session.Transport += ":tdd"
+		} else {
+			session.Session.Transport += ":lte-tdd"
+		}
 	case notecard.NetworkBearerLteFdd:
 		session.Session.Bearer = "LTE FDD"
+		if rat == "lte" {
+			session.Session.Transport += ":fdd"
+		} else {
+			session.Session.Transport += ":lte-fdd"
+		}
 	case notecard.NetworkBearerNBIot:
 		session.Session.Bearer = "NB-IoT"
+		if rat != "nbiot" {
+			session.Session.Transport += ":nbiot"
+		}
 	case notecard.NetworkBearerWLan:
 		session.Session.Bearer = "WiFi"
+		if rat == "wifi-2.4" {
+			session.Session.Transport = "wifi"
+		} else if session.Session.Transport != "wifi" {
+			session.Session.Transport += ":wifi"
+		}
 	case notecard.NetworkBearerBluetooth:
 		session.Session.Bearer = "Bluetooth"
 	case notecard.NetworkBearerIeee802p15p4:
@@ -1277,6 +1339,8 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.Temp100 = pb.GetTemp100()
 	msg.Voltage1000 = pb.GetVoltage1000()
 	msg.Temp1000 = pb.GetTemp1000()
+	msg.PowerSource = pb.GetPowerSource()
+	msg.PowerMahUsed = pb.GetPowerMahUsed()
 	msg.UsageProvisioned = pb.GetUsageProvisioned()
 	msg.UsageRcvdBytes = pb.GetUsageRcvdBytes()
 	msg.UsageSentBytes = pb.GetUsageSentBytes()
@@ -1363,7 +1427,7 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 }
 
 // WireReadRequest reads a message from the specified reader
-func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, request []byte, err error) {
+func WireReadRequest(ctx context.Context, conn net.Conn, waitIndefinitely bool) (bytesRead uint32, request []byte, err error) {
 	var n int
 	var version []byte
 
@@ -1376,13 +1440,16 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		var err2 error
 		versionLen := 1
 		version = make([]byte, versionLen)
-		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
-		n, err2 = rdconn.Read(version)
-		if debugWireRead {
-			if err2 == nil {
-				logDebug(context.Background(), "\n\nrdVersion(%d) %d", len(version), n)
-			}
+		if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+			logError(ctx, "SetReadDeadline: %v", err)
 		}
+
+		n, err2 = rdconn.Read(version)
+
+		if debugWireRead && err2 == nil {
+			logDebug(ctx, "\n\nrdVersion(%d) %d", len(version), n)
+		}
+
 		if err2, ok := err2.(net.Error); ok && err2.Timeout() {
 			if !waitIndefinitely {
 				err = fmt.Errorf("wire read: " + note.ErrTimeout + " timeout on read")
@@ -1406,7 +1473,7 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		break
 	}
 
-	// Process the version byte to determine the length of th header that follows
+	// Process the version byte to determine the length of the header that follows
 	isValidVersion, headerLength := wireProcessVersionByte(version[0])
 	if !isValidVersion {
 		err = fmt.Errorf("wire read: unrecognized protocol")
@@ -1415,16 +1482,18 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 
 	// Read the header
 	header := make([]byte, headerLength)
-	_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+	if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+		logError(ctx, "SetReadDeadline: %v", err)
+	}
 	if debugWireRead {
-		logDebug(context.Background(), "rdHeader(%d)", len(header))
+		logDebug(ctx, "rdHeader(%d)", len(header))
 	}
 	n, err = io.ReadFull(rdconn, header)
 	if debugWireRead {
 		if err == nil {
-			logDebug(context.Background(), "rdHeader(%d) %d", len(header), n)
+			logDebug(ctx, "rdHeader(%d) %d", len(header), n)
 		} else {
-			logWarn(context.Background(), "rdHeader(%d) %d %s", len(header), n, err)
+			logWarn(ctx, "rdHeader(%d) %d %s", len(header), n, err)
 		}
 	}
 	if err != nil {
@@ -1447,16 +1516,18 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 	var protobuf []byte
 	if protobufLength != 0 {
 		protobuf = make([]byte, protobufLength)
-		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+		if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+			logError(ctx, "SetReadDeadline: %v", err)
+		}
 		if debugWireRead {
-			logDebug(context.Background(), "rdProtobuf(%d)", len(protobuf))
+			logDebug(ctx, "rdProtobuf(%d)", len(protobuf))
 		}
 		n, err = io.ReadFull(rdconn, protobuf)
 		if debugWireRead {
 			if err == nil {
-				logDebug(context.Background(), "rdProtobuf(%d) %d", len(protobuf), n)
+				logDebug(ctx, "rdProtobuf(%d) %d", len(protobuf), n)
 			} else {
-				logWarn(context.Background(), "rdProtobuf(%d) %d %s", len(protobuf), n, err)
+				logWarn(ctx, "rdProtobuf(%d) %d %s", len(protobuf), n, err)
 			}
 		}
 		if err != nil {
@@ -1481,16 +1552,18 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 	var binary []byte
 	if binaryLength != 0 {
 		binary = make([]byte, binaryLength)
-		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+		if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+			logError(ctx, "SetReadDeadline: %v", err)
+		}
 		if debugWireRead {
-			logDebug(context.Background(), "rdBinary(%d)", len(binary))
+			logDebug(ctx, "rdBinary(%d)", len(binary))
 		}
 		n, err = io.ReadFull(rdconn, binary)
 		if debugWireRead {
 			if err == nil {
-				logDebug(context.Background(), "rdBinary(%d) %d", len(binary), n)
+				logDebug(ctx, "rdBinary(%d) %d", len(binary), n)
 			} else {
-				logWarn(context.Background(), "rdBinary(%d) %d %s", len(binary), n, err)
+				logWarn(ctx, "rdBinary(%d) %d %s", len(binary), n, err)
 			}
 		}
 		if err != nil {

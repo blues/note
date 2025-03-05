@@ -27,6 +27,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,21 +46,16 @@ var boxLock sync.RWMutex
 var autoCheckpointStarted bool
 var autoCheckpointStartedLock sync.Mutex
 
+// Checkpoint timing.  Note that we only purge on a longer basis than writes because as of 2024-08-29
+// I changed the session close code to purge closed notefiles from the in-memory cache whenever the
+// session closes.  The only remaining function of the AutoPurge is to remove closed notefiles
+// from memory for continuous sessions.  Because this will cause active notefiles to be immediately
+// re-opened, we don't want to do it too often.
 var (
 	AutoCheckpointSeconds = 5 * 60
-	AutoPurgeSeconds      = 5 * 60
+	AutoPurgeSeconds      = 120 * 60
 	CheckpointSilently    = false
 )
-
-// Information about files and templates
-type NoteboxNotefileInfo struct {
-	NotefileID      string
-	Info            note.NotefileInfo
-	BodyTemplate    string
-	PayloadTemplate uint32
-	TemplateFormat  uint32
-	TemplatePort    uint16
-}
 
 // See if a string is in a string array
 func isNoteInNoteArray(val string, array []string) bool {
@@ -101,7 +97,7 @@ func initNotebox(ctx context.Context, endpointID string, boxStorage string, stor
 	}
 	note, err := note.CreateNote(noteboxBodyToJSON(body), nil)
 	if err == nil {
-		_, err = boxfile.AddNote(endpointID, compositeNoteID(endpointID, endpointID), note)
+		_, err = boxfile.AddNote(ctx, endpointID, compositeNoteID(endpointID, endpointID), note)
 	}
 	if err != nil {
 		return err
@@ -329,7 +325,7 @@ func Checkpoint(ctx context.Context) (err error) {
 	return checkpointAllNoteboxes(ctx, true)
 }
 
-// CheckpointNoteboxIfNeeded checkpoints a notebox if it's open
+// CheckpointNoteboxIfNeeded checkpoints a notebox if it's open, purging closed files from the cache
 func CheckpointNoteboxIfNeeded(ctx context.Context, localEndpointID string, boxLocalStorage string) error {
 	// Initialize debugging if we've not done so before
 	debugEnvInit()
@@ -349,7 +345,7 @@ func CheckpointNoteboxIfNeeded(ctx context.Context, localEndpointID string, boxL
 		return err
 	}
 
-	err = notebox.Checkpoint(ctx)
+	err = notebox.CheckpointPurge(ctx)
 	_ = notebox.Close(ctx)
 	return err
 }
@@ -419,6 +415,12 @@ func (box *Notebox) Checkpoint(ctx context.Context) (err error) {
 	return
 }
 
+// Checkpoint a notebox and purge closed/cached files from memory
+func (box *Notebox) CheckpointPurge(ctx context.Context) (err error) {
+	_, err = box.checkpoint(ctx, true, true, true, true)
+	return
+}
+
 // uCheckpoint checkpoints an open notebox
 func (box *Notebox) checkpoint(ctx context.Context, write bool, purgeClosed bool, purgeClosedForce bool, purgeClosedDeleted bool) (emptyBox bool, err error) {
 	var firstError error
@@ -461,11 +463,11 @@ func (box *Notebox) checkpoint(ctx context.Context, write bool, purgeClosed bool
 				// thrash flash I/O unnecessarily.
 				if purgeClosedForce || (purgeClosed && (time.Since(openfile.closeTime) >= time.Duration(AutoPurgeSeconds)*time.Second)) {
 					box.instance.openfiles.Delete(fileStorage)
-					if debugBox {
+					if !CheckpointSilently {
 						if openfile.deleted {
-							logDebug(ctx, "%s purged (had been deleted)", fileStorage)
+							logDebug(ctx, "CHECKPOINT PURGE %s (had been deleted)", fileStorage)
 						} else {
-							logDebug(ctx, "%s purged", fileStorage)
+							logDebug(ctx, "CHECKPOINT PURGE %s", fileStorage)
 						}
 					}
 					openfile.lock.Unlock()
@@ -580,8 +582,14 @@ func (box *Notebox) EndpointID() string {
 }
 
 // GetChangedNotefiles determines, for a given tracker, if there are changes in any notebox and,
-// if so, for which ones.
+// if so, for which ones.  NOTE that after significant performance measurement in Aug 2024 it became
+// clear that this method would be far, far more efficient if we would design a box.OpenNotefiles() method
+// that returns a vector of notefiles after doing a single app DB query of all of them to get their contents,
+// using a new storage.readNotefiles() method.  If and when we're looking to improve performance this would
+// be a great addition, specifically because the msgNoteboxSummary transaction is done at the beginning
+// of each and every sync and thus is inherently a hotspot.
 func (box *Notebox) GetChangedNotefiles(ctx context.Context, endpointID string) (changedNotefiles []string) {
+
 	// Get the names of all possible openable Notefiles
 	allNotefiles := box.Notefiles(true)
 
@@ -761,7 +769,7 @@ func (box *Notebox) AddNotefile(ctx context.Context, notefileID string, notefile
 			notefileInfo = &note.NotefileInfo{}
 		}
 
-		return box.SetNotefileInfo(notefileID, *notefileInfo)
+		return box.SetNotefileInfo(ctx, notefileID, *notefileInfo)
 
 	}
 
@@ -812,7 +820,7 @@ func (box *Notebox) GetNotefileInfo(notefileID string) (notefileInfo note.Notefi
 }
 
 // SetNotefileInfo sets the info about a notefile that is allowed to be changed after notefile creation
-func (box *Notebox) SetNotefileInfo(notefileID string, notefileInfo note.NotefileInfo) (err error) {
+func (box *Notebox) SetNotefileInfo(ctx context.Context, notefileID string, notefileInfo note.NotefileInfo) (err error) {
 	// Now we're going to add things to the boxfile
 	boxfile := box.Notefile()
 
@@ -839,7 +847,7 @@ func (box *Notebox) SetNotefileInfo(notefileID string, notefileInfo note.Notefil
 	_ = xnote.SetBody(noteboxBodyToJSON(body))
 
 	// Update the note
-	err = boxfile.UpdateNote(box.instance.endpointID, notefileID, xnote)
+	err = boxfile.UpdateNote(ctx, box.instance.endpointID, notefileID, xnote)
 	if err != nil {
 		return fmt.Errorf(note.ErrNotefileNoExist+" cannot set info for notefile %s: %s", notefileID, err)
 	}
@@ -1043,7 +1051,7 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 		// then comes in, the event will be referencing the now-defunct session and
 		// it will never get sent to the worker.  This forces the session to be
 		// refreshed every time we open the notefile, thus ensuring session freshness.
-		openfile.notefile.SetEventInfo(box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventProductUID, box.defaultEventAppUID, box.defaultEventFn, box.defaultEventSession)
+		openfile.notefile.SetEventInfo(box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventProductUID, box.defaultEventAppUID, box.defaultEventTransport, box.defaultEventFn, box.defaultEventSession)
 
 		// Done
 		return openfile, openfile.notefile, nil
@@ -1078,7 +1086,7 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 	// deviceUID or productUID on the client side because they are not always known
 	// at the time we do the open.  As such, client-side notifiers will need
 	// to function without these values.
-	notefile.SetEventInfo(box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventProductUID, box.defaultEventAppUID, box.defaultEventFn, box.defaultEventSession)
+	notefile.SetEventInfo(box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventProductUID, box.defaultEventAppUID, box.defaultEventTransport, box.defaultEventFn, box.defaultEventSession)
 
 	// Copy the notefile info for all but box notefiles
 	if notefileID != box.instance.endpointID {
@@ -1113,11 +1121,12 @@ func (box *Notebox) SetClientInfo(httpReq *http.Request, httpRsp http.ResponseWr
 }
 
 // SetEventInfo establishes default information used for change notification on notefiles opened in the box
-func (box *Notebox) SetEventInfo(deviceUID string, deviceSN string, productUID string, appUID string, eventFn EventFunc, session *HubSession) {
+func (box *Notebox) SetEventInfo(deviceUID string, deviceSN string, productUID string, appUID string, transport string, eventFn EventFunc, session *HubSession) {
 	box.defaultEventDeviceUID = deviceUID
 	box.defaultEventDeviceSN = deviceSN
 	box.defaultEventProductUID = productUID
 	box.defaultEventAppUID = appUID
+	box.defaultEventTransport = transport
 	box.defaultEventFn = eventFn
 	box.defaultEventSession = session
 }
@@ -1210,7 +1219,7 @@ func (box *Notebox) DeleteNotefile(ctx context.Context, notefileID string) (err 
 	boxfile.lock.RUnlock()
 	if !found {
 		box.Openfile().lock.Unlock()
-		_ = boxfile.DeleteNote(box.instance.endpointID, notefileID)
+		_ = boxfile.DeleteNote(ctx, box.instance.endpointID, notefileID)
 		return nil
 	}
 
@@ -1246,7 +1255,7 @@ func (box *Notebox) DeleteNotefile(ctx context.Context, notefileID string) (err 
 
 		// Delete the note used for managing notefiles across all instances,
 		// ignoring errors because it may have been deleted by another instance
-		_ = boxfile.DeleteNote(box.instance.endpointID, notefileID)
+		_ = boxfile.DeleteNote(ctx, box.instance.endpointID, notefileID)
 
 		// Delete the storage object
 		_ = storage.delete(ctx, box.instance.storage, notefileBody.Notefile.Storage)
@@ -1257,7 +1266,7 @@ func (box *Notebox) DeleteNotefile(ctx context.Context, notefileID string) (err 
 	box.Openfile().lock.Unlock()
 
 	// Delete the note for managing the instance
-	_ = boxfile.DeleteNote(box.instance.endpointID, notefileNoteID)
+	_ = boxfile.DeleteNote(ctx, box.instance.endpointID, notefileNoteID)
 
 	// Done
 	return nil
@@ -1309,7 +1318,7 @@ func (box *Notebox) AddNote(ctx context.Context, endpointID string, notefileID s
 		return err
 	}
 
-	_, err = file.AddNote(endpointID, noteID, note)
+	_, err = file.AddNote(ctx, endpointID, noteID, note)
 
 	openfile.Close(ctx)
 
@@ -1323,7 +1332,7 @@ func (box *Notebox) AddNoteWithHistory(ctx context.Context, endpointID string, n
 		return err
 	}
 
-	_, err = file.AddNoteWithHistory(endpointID, noteID, note)
+	_, err = file.AddNoteWithHistory(ctx, endpointID, noteID, note)
 
 	openfile.Close(ctx)
 
@@ -1337,7 +1346,7 @@ func (box *Notebox) UpdateNote(ctx context.Context, endpointID string, notefileI
 		return err
 	}
 
-	err = file.UpdateNote(endpointID, noteID, note)
+	err = file.UpdateNote(ctx, endpointID, noteID, note)
 
 	openfile.Close(ctx)
 
@@ -1351,7 +1360,7 @@ func (box *Notebox) DeleteNote(ctx context.Context, endpointID string, notefileI
 		return err
 	}
 
-	err = file.DeleteNote(endpointID, noteID)
+	err = file.DeleteNote(ctx, endpointID, noteID)
 
 	openfile.Close(ctx)
 
@@ -1403,6 +1412,9 @@ func (box *Notebox) MergeNotebox(ctx context.Context, fromBoxfile *Notefile) (er
 	// delete notes that are our only pointers to local storage.  We simply don't allow remote
 	// endpoints to modify our local instance notes.
 	for noteID := range fromBoxfile.Notes {
+		if noteID == "" {
+			logError(ctx, "MergeNotebox: empty notefileID coming from Notecard")
+		}
 		isInstance, endpointID, _ := parseCompositeNoteID(noteID)
 		if isInstance && endpointID == box.instance.endpointID {
 			delete(fromBoxfile.Notes, noteID)
@@ -1411,7 +1423,7 @@ func (box *Notebox) MergeNotebox(ctx context.Context, fromBoxfile *Notefile) (er
 
 	// Next, merge what's remaining.  This will add and remove remote all remote notefile changes,
 	// as well as updating the global notefile notes that contain NotefileInfo
-	err = boxfile.MergeNotefile(fromBoxfile)
+	err = boxfile.MergeNotefile(ctx, fromBoxfile)
 	if err != nil {
 		return err
 	}
@@ -1440,6 +1452,12 @@ func (box *Notebox) MergeNotebox(ctx context.Context, fromBoxfile *Notefile) (er
 	existsGloballyNoteID := []string{}
 	deletedGloballyNoteID := []string{}
 	for noteID, note := range boxfile.Notes {
+		if noteID == "" {
+			logError(ctx, "MergeNotebox: empty notefileID in merged contents of Notecard and Notehub")
+			delete(boxfile.Notes, noteID)
+			didSomething = true
+			continue
+		}
 		isInstance, endpointID, notefileID := parseCompositeNoteID(noteID)
 		// Skip notebox descriptors
 		if endpointID == notefileID {
@@ -1556,8 +1574,8 @@ func (box *Notebox) VerifyAccess(resource string, actions string) (err error) {
 	return nil
 }
 
-// NoteboxNotefileInfo gets info about all notefiles in a notebox
-func (box *Notebox) NoteboxNotefileInfo() (allInfo []NoteboxNotefileInfo) {
+// NoteboxNotefileDesc gets info about all notefiles in a notebox
+func (box *Notebox) NoteboxNotefileDesc() (allInfo []note.NotefileDesc) {
 
 	// Enum all notes in the boxfile, looking at the global files only
 	boxfile := box.Notefile()
@@ -1566,7 +1584,7 @@ func (box *Notebox) NoteboxNotefileInfo() (allInfo []NoteboxNotefileInfo) {
 		isInstance, _, notefileID := parseCompositeNoteID(noteID)
 		if !isInstance && !xnote.Deleted {
 			notefileBody := noteboxBodyFromJSON(xnote.GetBody())
-			info := NoteboxNotefileInfo{}
+			info := note.NotefileDesc{}
 			info.NotefileID = notefileID
 			if notefileBody.Notefile.Info != nil {
 				info.Info = *notefileBody.Notefile.Info
@@ -1580,12 +1598,30 @@ func (box *Notebox) NoteboxNotefileInfo() (allInfo []NoteboxNotefileInfo) {
 	}
 	boxfile.lock.RUnlock()
 
+	// Sort the allInfo slice by NotefileID in ascending order.  (See comment related
+	// to 'determinism' in the NoteboxNotefileDescByPort() method below.)
+	sort.Slice(allInfo, func(i, j int) bool {
+		return allInfo[i].NotefileID < allInfo[j].NotefileID
+	})
+
+	// Done
 	return allInfo
 
 }
 
-// NoteboxNotefileInfoByPort gets info about all notefiles in a notebox
-func NoteboxNotefileInfoByPort(allInfo []NoteboxNotefileInfo, port uint16) (info NoteboxNotefileInfo, present bool) {
+// NoteboxNotefileDescByPort gets info about all notefiles in a notebox.  Note that for
+// determinism in the case where someone accidentally creates two notefiles with the same
+// port, this method relies upon the fact that NoteboxNotefileDesc() returns the notefiles
+// in alphabetized sort order.  (The notecard DOES try to keep devs from assigning the same
+// port to multiple notefiles, however this can happen by:
+// a) add notefiles "a.qi port 1"
+// b) sync
+// c) factory reset notecard and quickly do a hub.set mode:off to keep it from syncing
+// d) add notefiles "b.qi port 1"
+// e) set hub.set mode:periodic and sync
+// At the end of this, because a.qi comes back from the notehub, and b.qi goes up to
+// the notehub, there are two notefiles with the same port number.
+func NoteboxNotefileDescByPort(allInfo []note.NotefileDesc, port uint16) (info note.NotefileDesc, present bool) {
 	for _, inf := range allInfo {
 		if inf.TemplatePort == port {
 			return inf, true

@@ -19,7 +19,6 @@ import (
 
 	"github.com/blues/note-go/note"
 	olc "github.com/google/open-location-code/go"
-	"github.com/google/uuid"
 )
 
 // Debug
@@ -39,6 +38,7 @@ type Notefile struct {
 	eventDeviceSN   string               // The deviceSN being dealt with at the time of the event setup
 	eventProductUID string               // The productUID being dealt with at the time of the event setup
 	eventAppUID     string               // The appUID being dealt with at the time of the event setup
+	eventTransport  string               // The transport being dealt with at the time of the event setup
 	notefileID      string               // The NotefileID for the open notefile
 	notefileInfo    note.NotefileInfo    // The NotefileInfo for the open notefile
 	Queue           bool                 `json:"Q,omitempty"`
@@ -167,7 +167,7 @@ func (nf *Notefile) Info() (info note.NotefileInfo) {
 }
 
 // SetEventInfo supplies information used for change notification
-func (nf *Notefile) SetEventInfo(deviceUID string, deviceSN string, productUID string, appUID string, eventFn EventFunc, eventSession *HubSession) {
+func (nf *Notefile) SetEventInfo(deviceUID string, deviceSN string, productUID string, appUID string, transport string, eventFn EventFunc, eventSession *HubSession) {
 	// Lock for writing
 	nf.lock.Lock()
 
@@ -178,13 +178,14 @@ func (nf *Notefile) SetEventInfo(deviceUID string, deviceSN string, productUID s
 	nf.eventDeviceSN = deviceSN
 	nf.eventProductUID = productUID
 	nf.eventAppUID = appUID
+	nf.eventTransport = transport
 
 	// Unlock & exit
 	nf.lock.Unlock()
 }
 
 // GetEventInfo Gets information used for change notification
-func (nf *Notefile) GetEventInfo() (deviceUID string, deviceSN string, productUID string, appUID string, eventFn EventFunc, eventSession *HubSession) {
+func (nf *Notefile) GetEventInfo() (deviceUID string, deviceSN string, productUID string, appUID string, transport string, eventFn EventFunc, eventSession *HubSession) {
 
 	// Lock for reading
 	nf.lock.RLock()
@@ -196,6 +197,7 @@ func (nf *Notefile) GetEventInfo() (deviceUID string, deviceSN string, productUI
 	deviceSN = nf.eventDeviceSN
 	productUID = nf.eventProductUID
 	appUID = nf.eventAppUID
+	transport = nf.eventTransport
 
 	// Unlock & exit
 	nf.lock.RUnlock()
@@ -262,7 +264,7 @@ func (nf *Notefile) GetNote(noteID string) (xnote note.Note, err error) {
 }
 
 // event dispatches to the event proc based on the last change made to NoteID
-func (nf *Notefile) event(local bool, NoteID string) {
+func (nf *Notefile) event(ctx context.Context, local bool, NoteID string) {
 	if nf.eventFn == nil {
 		return
 	}
@@ -274,13 +276,15 @@ func (nf *Notefile) event(local bool, NoteID string) {
 		if ErrorContains(err, note.ErrNoteNoExist) {
 			return
 		}
-		logError(context.Background(), "event: GetNote(%s) error: %s", NoteID, err)
+		logError(ctx, "event: GetNote(%s) error: %s", NoteID, err)
 		return
 	}
 
-	// Set up the notification structure
+	// Set up the notification structure.  Note that prior to Oct 2024 we used to
+	// add the EndpointID, however the fact that Notehub-generated events failed
+	// to add EndpointID (combined with the fact that we don't document what
+	// EndpointID even means) means that it's best to not include it in the first place.
 	event := note.Event{}
-	event.EventUID = uuid.New().String()
 	if xnote.Deleted && !nf.Queue {
 		event.Req = note.EventDelete
 	} else if xnote.Updates != 0 {
@@ -289,7 +293,6 @@ func (nf *Notefile) event(local bool, NoteID string) {
 		event.Req = note.EventAdd
 	}
 	event.NoteID = NoteID
-	event.EndpointID = xnote.EndpointID()
 	event.Deleted = xnote.Deleted
 	event.Sent = xnote.Sent
 	event.Bulk = xnote.Bulk
@@ -301,6 +304,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 	if nf.eventAppUID != "" {
 		event.AppUID = nf.eventAppUID
 	}
+	event.Transport = nf.eventTransport
 	event.Payload = xnote.Payload
 	if xnote.Body != nil {
 		event.Body = &xnote.Body
@@ -339,8 +343,19 @@ func (nf *Notefile) event(local bool, NoteID string) {
 		event.Deleted = false
 	}
 
+	// Now that the event has been initialized, generate a UID.  Note that if we are
+	// generating it locally, generate a totally unique event UID because we know for a
+	// fact that the even isn't going to be a duplicate of one generated anywhere else,
+	// and otherwise generate a UID that is content-dependent so that if the notecard
+	// uploads duplicates they won't be saved.
+	if local {
+		event.EventUID = GenerateEventUid(nil)
+	} else {
+		event.EventUID = GenerateEventUid(&event)
+	}
+
 	// Debug
-	if debugEvent {
+	if DebugEvent {
 		logString := fmt.Sprintf("event: %s %s %s %s %s", event.Req, event.NotefileID, nf.eventAppUID, event.DeviceUID, event.ProductUID)
 		if len(event.Payload) > 0 {
 			if event.Bulk {
@@ -350,7 +365,7 @@ func (nf *Notefile) event(local bool, NoteID string) {
 			}
 		}
 		// No need to log customer data body
-		logDebug(context.Background(), "%s", logString)
+		logDebug(ctx, "%s", logString)
 	}
 
 	// Disable the event function so as to avoid recursion
@@ -359,9 +374,32 @@ func (nf *Notefile) event(local bool, NoteID string) {
 
 	// Perform the notification (checking savedFn in case of race condition, because everything is unlocked
 	if savedFn != nil {
-		err = savedFn(context.Background(), nf.eventSession, local, nf, &event)
+		start := time.Now()
+		err = savedFn(ctx, nf.eventSession, local, &event)
+		duration := time.Since(start)
+		// Since most note operations take a few milliseconds, logging the event should
+		// really only take a few milliseconds else the logging will dominate the operation itself,
+		// so issue a warning so that we can fix the logging.
+		if duration > 5*time.Second {
+			typeMsg := "event"
+			if local {
+				typeMsg = "local " + typeMsg
+			}
+			if event.Bulk {
+				typeMsg = "bulk " + typeMsg
+			}
+			if nf.eventSession == nil {
+				typeMsg = typeMsg + " (no session)"
+			}
+			message := fmt.Sprintf("%s %s %s [timewarn] warning: %s enqueue took %s", nf.eventAppUID, nf.eventDeviceUID, nf.notefileID, typeMsg, duration)
+			if duration > transactionErrorDuration {
+				logWarn(ctx, message)
+			} else {
+				logInfo(ctx, message)
+			}
+		}
 		if err != nil {
-			logError(context.Background(), "event notification error: %s %s %s: %s", nf.eventAppUID, event.DeviceUID, event.NotefileID, err)
+			logError(ctx, "%s %s %s event notification error: %s", nf.eventAppUID, event.DeviceUID, event.NotefileID, err)
 		}
 	}
 
@@ -430,9 +468,9 @@ func (nf *Notefile) MarkAsModified(reason string) {
 // undelete it and thus it will be present everywhere except the source.  This is an intentional
 // asymmetry in synchronization that is primarily useful when sending "to hub" or "from hub".
 // By convention, sent notes should be deleted after they have been processed by the recipient(s).
-func (nf *Notefile) AddNote(endpointID string, noteID string, xnote note.Note) (newNoteID string, err error) {
+func (nf *Notefile) AddNote(ctx context.Context, endpointID string, noteID string, xnote note.Note) (newNoteID string, err error) {
 	xnote.Histories = nil
-	return nf.AddNoteWithHistory(endpointID, noteID, xnote)
+	return nf.AddNoteWithHistory(ctx, endpointID, noteID, xnote)
 }
 
 // Set the 'when' date on a note immediately AFTER it has been added/updated
@@ -460,7 +498,7 @@ func (nf *Notefile) SetNoteWhen(noteID string, when int64) (success bool) {
 }
 
 // AddNoteWithHistory is same as AddNote, but it retains history
-func (nf *Notefile) AddNoteWithHistory(endpointID string, noteID string, xnote note.Note) (newNoteID string, err error) {
+func (nf *Notefile) AddNoteWithHistory(ctx context.Context, endpointID string, noteID string, xnote note.Note) (newNoteID string, err error) {
 	// Create a note ID if not specified
 	if nf.Queue || noteID == "" {
 		noteID = nf.NewNoteID(endpointID)
@@ -469,7 +507,7 @@ func (nf *Notefile) AddNoteWithHistory(endpointID string, noteID string, xnote n
 	// If the note exists as a deleted note, turn it into an update
 	onote, present := nf.Notes[noteID]
 	if !nf.Queue && present && onote.Deleted {
-		err = nf.UpdateNote(endpointID, noteID, xnote)
+		err = nf.UpdateNote(ctx, endpointID, noteID, xnote)
 		return noteID, err
 	}
 
@@ -489,7 +527,7 @@ func (nf *Notefile) AddNoteWithHistory(endpointID string, noteID string, xnote n
 	}
 
 	// Event listeners
-	nf.event(endpointID != note.DefaultDeviceEndpointID, noteID)
+	nf.event(ctx, endpointID != note.DefaultDeviceEndpointID, noteID)
 
 	// Done
 	return noteID, err
@@ -532,7 +570,7 @@ func (nf *Notefile) uUpdateNote(endpointID string, noteID string, xnote *note.No
 
 // UpdateNote updates an existing note within a Notefile, as well
 // as updating all its history and conflict metadata as appropriate.
-func (nf *Notefile) UpdateNote(endpointID string, noteID string, xnote note.Note) error {
+func (nf *Notefile) UpdateNote(ctx context.Context, endpointID string, noteID string, xnote note.Note) error {
 	// Exit if trying to update within a queue
 	if nf.Queue {
 		return fmt.Errorf(note.ErrNotefileQueueDisallowed + " operation not allowed on queue notefiles")
@@ -549,7 +587,7 @@ func (nf *Notefile) UpdateNote(endpointID string, noteID string, xnote note.Note
 
 	// Event listeners
 	if err == nil {
-		nf.event(endpointID != note.DefaultDeviceEndpointID, noteID)
+		nf.event(ctx, endpointID != note.DefaultDeviceEndpointID, noteID)
 	}
 
 	return err
@@ -576,7 +614,7 @@ func (nf *Notefile) uDeleteNote(endpointID string, noteID string, xnote *note.No
 // DeleteNote sets the deleted flag on an existing note from in a Notefile,
 // marking it so that it will be purged at a later time when safe to do so
 // from a synchronization perspective.
-func (nf *Notefile) DeleteNote(endpointID string, noteID string) error {
+func (nf *Notefile) DeleteNote(ctx context.Context, endpointID string, noteID string) error {
 	// Lock for writing
 	nf.lock.Lock()
 
@@ -595,7 +633,7 @@ func (nf *Notefile) DeleteNote(endpointID string, noteID string) error {
 
 	// Event listeners
 	if err == nil {
-		nf.event(endpointID != note.DefaultDeviceEndpointID, noteID)
+		nf.event(ctx, endpointID != note.DefaultDeviceEndpointID, noteID)
 	}
 
 	// Done
@@ -665,7 +703,7 @@ func (nf *Notefile) uGetMergeNoteChangeList(fromNotefile *Notefile) (notelist []
 }
 
 // MergeNotefile combines/merges the entire contents of one Notefile into another
-func (nf *Notefile) MergeNotefile(fromNotefile *Notefile) error {
+func (nf *Notefile) MergeNotefile(ctx context.Context, fromNotefile *Notefile) error {
 	// Lock for writing
 	nf.lock.Lock()
 
@@ -718,10 +756,10 @@ func (nf *Notefile) MergeNotefile(fromNotefile *Notefile) error {
 	// an inbound queue, delete the contents after modification because this is the core essential
 	// behavior of queues
 	for i := range modifiedNoteIDs {
-		nf.event(false, modifiedNoteIDs[i])
+		nf.event(ctx, false, modifiedNoteIDs[i])
 		if inboundQueuesProcessedByNotifier {
 			if nf.Queue {
-				_ = nf.DeleteNote(note.DefaultHubEndpointID, modifiedNoteIDs[i])
+				_ = nf.DeleteNote(ctx, note.DefaultHubEndpointID, modifiedNoteIDs[i])
 			}
 		}
 	}
@@ -919,6 +957,7 @@ func NotefileIDIsReservedWithExceptions(notefileID string) bool {
 	if notefileID == note.TrackNotefile ||
 		notefileID == note.LogNotefile ||
 		notefileID == note.HealthNotefile ||
+		notefileID == note.HealthHostNotefile ||
 		notefileID == note.NotecardRequestNotefile ||
 		notefileID == note.NotecardResponseNotefile {
 		return false
