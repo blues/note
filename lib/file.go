@@ -8,6 +8,7 @@ package notelib
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 )
 
@@ -211,6 +212,10 @@ func fsCreate(ctx context.Context, storageHint string, filenameHint string) (sto
 	path := fsPath(name)
 	err = fio.Create(ctx, path)
 	if err != nil {
+		if deletionForbidden(ctx, path) {
+			err = fmt.Errorf("file: can't re-create %s: %s", path, err)
+			return
+		}
 		_ = fio.Delete(ctx, path)
 		err = fio.Create(ctx, path)
 		if err != nil {
@@ -237,6 +242,9 @@ func fsCreateObject(ctx context.Context, storageObject string) (err error) {
 	path := fsPath(name)
 	err = fio.Create(ctx, path)
 	if err != nil {
+		if deletionForbidden(ctx, path) {
+			return fmt.Errorf("file: can't re-create %s: %s", path, err)
+		}
 		_ = fio.Delete(ctx, path)
 		err = fio.Create(ctx, path)
 		if err != nil {
@@ -272,7 +280,25 @@ func fsObjectsToPath(iContainer string, iObject string) string {
 
 // Delete a file system object
 func fsDelete(ctx context.Context, container string, object string) (err error) {
-	return fio.Delete(ctx, fsObjectsToPath(container, object))
+	path := fsObjectsToPath(container, object)
+	if deletionForbidden(ctx, path) {
+		return nil
+	}
+	return fio.Delete(ctx, path)
+}
+
+// It is quite catastrophic if we attempt to delete the entire file storage root, because for NTN
+// recovery is simply impossible.  As such, we treat this like a 'bug check' and forbid the operation.
+func deletionForbidden(ctx context.Context, path string) bool {
+
+	// If the path ends in our default storage extension, this must be a file storage object
+	if !strings.HasSuffix(path, defaultFileStorageName+defaultFileStorageExt) {
+		return false
+	}
+
+	// This should be so incredibly rare that if it does happen we want to see exactly why we are here
+	logError(ctx, "[dbwarn] attempt to delete file storage root via:\n%s", debug.Stack())
+	return true
 }
 
 // Writes a notefile to the specified file

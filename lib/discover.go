@@ -23,7 +23,7 @@ type DiscoverInfo struct {
 }
 
 // DiscoverFunc is the func to retrieve discovery info for this server
-type DiscoverFunc func(edgeUID string, deviceSN string, productUID string, hostname string, packetHandlerVersion string) (info DiscoverInfo, err error)
+type DiscoverFunc func(edgeUID string, deviceSN string, productUID string, appUID string, needHandlerInfo bool, hostname string, packetHandlerVersion string) (info DiscoverInfo, err error)
 
 var fnDiscover DiscoverFunc
 
@@ -37,23 +37,40 @@ func HubSetDiscover(fn DiscoverFunc) {
 }
 
 // HubDiscover ensures that we've read the local server's discover info, and return the Hub's Endpoint ID
-func HubDiscover(deviceUID string, deviceSN string, productUID string) (hubSessionTicket string, hubEndpointID string, appUID string, deviceStorageObject string, err error) {
+func HubDiscover(deviceUID string, deviceSN string, productUID string, appUID string) (hubEndpointID string, retAppUID string, deviceStorageObject string, err error) {
 	if fnDiscover == nil {
 		err = fmt.Errorf("no discovery function is available")
 		return
 	}
 
 	// Call the discover func with the null edge UID just to get basic server info
-	discinfo, err := fnDiscover(deviceUID, deviceSN, productUID, "*", "")
+	discinfo, err := fnDiscover(deviceUID, deviceSN, productUID, appUID, false, "*", "")
 	if err != nil {
 		err = fmt.Errorf("error from discovery handler for %s: %s", deviceUID, err)
 		return
 	}
 
-	return discinfo.HubSessionTicket, discinfo.HubEndpointID, discinfo.HubDeviceAppUID, discinfo.HubDeviceStorageObject, nil
+	return discinfo.HubEndpointID, discinfo.HubDeviceAppUID, discinfo.HubDeviceStorageObject, nil
 }
 
-// HubDiscover calls the discover function, and return discovery info
+// HubDiscoverSessionTicket gets the session ticket for a session
+func HubDiscoverSessionTicket(deviceUID string, deviceSN string, productUID string, appUID string) (hubSessionTicket string, err error) {
+	if fnDiscover == nil {
+		err = fmt.Errorf("no discovery function is available")
+		return
+	}
+
+	// Call the discover func with the null edge UID just to get basic server info
+	discinfo, err := fnDiscover(deviceUID, deviceSN, productUID, appUID, true, "*", "")
+	if err != nil {
+		err = fmt.Errorf("error from discovery handler for %s: %s", deviceUID, err)
+		return
+	}
+
+	return discinfo.HubSessionTicket, nil
+}
+
+// HubProcessDiscoveryRequest calls the discover function, and return discovery info
 func hubProcessDiscoveryRequest(deviceUID string, deviceSN string, productUID string, hostname string, packetHandlerVersion string) (info DiscoverInfo, err error) {
 	if fnDiscover == nil {
 		err = fmt.Errorf("no discovery function is available")
@@ -61,7 +78,7 @@ func hubProcessDiscoveryRequest(deviceUID string, deviceSN string, productUID st
 	}
 
 	// Call the discover func
-	info, err = fnDiscover(deviceUID, deviceSN, productUID, hostname, packetHandlerVersion)
+	info, err = fnDiscover(deviceUID, deviceSN, productUID, "", true, hostname, packetHandlerVersion)
 	if err != nil {
 		err = fmt.Errorf("error from discovery handler for %s: %s", deviceUID, err)
 		return

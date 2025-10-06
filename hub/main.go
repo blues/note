@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"time"
 
 	notelib "github.com/blues/note/lib"
 )
@@ -71,11 +70,10 @@ func main() {
 	// Spawn HTTP for inbound web requests
 	http.HandleFunc(serverHTTPReqTopic, httpReqHandler)
 	http.HandleFunc(serverHTTPReqTopic+"/", httpReqHandler)
-	go http.ListenAndServe(serverPortHTTP, nil)
-
-	// Wait forever
-	for {
-		time.Sleep(5 * time.Minute)
+	err := http.ListenAndServe(serverPortHTTP, nil)
+	if err != nil {
+		fmt.Printf("Error running HTTP server on %s: %v\n", serverPortHTTP, err)
+		os.Exit(1)
 	}
 }
 

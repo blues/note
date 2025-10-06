@@ -8,9 +8,12 @@ package notelib
 import (
 	"context"
 	"crypto/md5"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"hash/crc32"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,10 +21,14 @@ import (
 	"github.com/blues/note-go/note"
 	"github.com/blues/note-go/notehub"
 	"github.com/golang/snappy"
+	golc "github.com/google/open-location-code/go"
 )
 
 // Flag indicating TLS support on this server
 var serverSupportsTLS bool
+
+// Maximum field length in our protobufs if null were included in the cstring (see notehub.options)
+const maxProtobufStringLength = 253
 
 // NoteboxUpdateEnvFunc is the func to update environment variables for a device
 type NoteboxUpdateEnvFunc func(ctx context.Context, box *Notebox, deviceUID string, appUID string, updateFeeds bool) (err error)
@@ -64,7 +71,7 @@ func HubSetReadFile(fn ReadFileFunc) {
 }
 
 // WebRequestFunc performs a web request on behalf of a device
-type WebRequestFunc func(ctx context.Context, sess *HubSession, deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqoffset int, reqmaxbytes int, target string, bodyJSON []byte, payload []byte) (rspstatuscode int, rspheader map[string][]string, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
+type WebRequestFunc func(ctx context.Context, sess *HubSession, deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqoffset int, reqmaxbytes int, target string, reqwhen int64, bodyJSON []byte, payload []byte) (rspstatuscode int, rspheader map[string][]string, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
 
 var fnHubWebRequest WebRequestFunc
 
@@ -98,6 +105,7 @@ func HubCheckpointRequest() (message []byte, err error) {
 // - if err is returned, do not return a reply to the remote requestor
 // - if err is nil, always send result back to request
 func HubRequest(ctx context.Context, content []byte, event EventFunc, session *HubSession) (reqtype string, result []byte, suppress bool, err error) {
+
 	// Preset in case of error return
 	var rsp notehubMessage
 	rsp.Version = currentProtocolVersion
@@ -109,27 +117,60 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, session *H
 	}
 
 	// Convert from on-wire text to a message, and extract its type
-	req, wirelen, err2 := msgFromWire(content)
+	contentCopyDebug := make([]byte, len(content))
+	copy(contentCopyDebug, content)
+	req, wirelen, err2 := msgFromWire(ctx, content)
 	if err2 != nil {
 		reqtype = "indeterminate"
 		err = err2
+		// Important note: If you see large hex output in the log, it means that you should explore
+		// why it is failing to parse. To do this, copy the hex output from the log entry and add it
+		// as a new test case in wire_test.go
+		session.LogWarn(ctx, "msgFromWire failed (%s) to decode %s", err, hex.EncodeToString(contentCopyDebug))
 		return
+	}
+
+	// Determine if the message type indicates that we want to suppress response
+	if strings.HasPrefix(req.MessageType, msgSuppressResponsePrefix) {
+		req.SuppressResponse = true
+		req.MessageType = strings.TrimPrefix(req.MessageType, msgSuppressResponsePrefix)
 	}
 
 	suppress = req.SuppressResponse
 	reqtype = msgTypeName(req.MessageType)
-	reqStart := time.Now()
 
+	// Some transactions are so frequent that they can impact performance if constantly logged
+	silentLog := false
+	switch req.MessageType {
+	case msgSignal, msgSocketSend, msgGetNotification:
+		silentLog = true
+	}
+
+	// Start logging
+	timerName := timerBegin(ctx, "hubRequest("+reqtype+")")
+	defer timerEnd(ctx, timerName)
+
+	// Warn if transactions take too long
+	reqStart := time.Now()
+	defer func() {
+		if time.Since(reqStart) > transactionErrorDuration && req.MessageType != msgGetNotification {
+			session.LogWarn(ctx, "%s %s [timewarn] excessively long request: %s", req.NotefileID, reqtype, time.Since(reqStart))
+		}
+	}()
+
+	// Extract key info from the request
 	filteredMsg := filterForLog(req)
 	filteredJSON, _ := note.JSONMarshal(filteredMsg)
-	session.LogInfo(ctx, "Request #%d (%db wire) %s %s", session.Transactions, wirelen, reqtype, filteredJSON)
+	if !silentLog {
+		session.LogInfo(ctx, "Request #%d (%db wire) %s %s", session.Transactions, wirelen, reqtype, filteredJSON)
+	}
 
 	// Authenticate the session
 	if !session.Active {
 
 		// Ensure that the device is valid.  (If it had to be provisioned it would've been before
 		// we ever arrived here.)
-		sessionTicket, _, _, _, err2 := HubDiscover(req.DeviceUID, req.DeviceSN, req.ProductUID)
+		sessionTicket, err2 := HubDiscoverSessionTicket(req.DeviceUID, req.DeviceSN, req.ProductUID, session.AppUID)
 		if err2 != nil {
 			err = fmt.Errorf("discover error "+note.ErrAuth+": %s", err2)
 		} else {
@@ -154,7 +195,7 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, session *H
 		// Set or supply session context as appropriate.  The client will send the data on EITHER
 		// a formal "set session context" message, OR on the very first message (as an optimization)
 		if !session.Active {
-			_, err = WireExtractSessionContext(content, session)
+			_, err = WireExtractSessionContext(ctx, content, session)
 			if err != nil {
 				err = fmt.Errorf("couldn't extract session context: %w", err)
 				return
@@ -198,11 +239,15 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, session *H
 
 	// After the first request has been successfully executed, mark it as active, and piggyback the session info
 	if err != nil {
-		rsp.Error = fmt.Sprintf("%s", err)
+		rsp.Error = TruncateErrorString(err.Error(), maxProtobufStringLength)
 		err = nil
 	} else if !session.Active {
 
 		session.Active = true
+
+		// Return whether or not the socket was successfully opened.  This field will either
+		// be "" if successfully opened, or the error string if it failed
+		rsp.SocketAlias = session.Session.SocketConnectError
 
 		// Return info to the client about its position and timezone.  Prefer to use Tower because
 		// it may be more up-to-date than the triangulated position, but if it's not available (such
@@ -245,6 +290,7 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, session *H
 	// Convert back to on-wire format
 	result, wirelen, err = msgToWire(rsp)
 	if err != nil {
+		logError(ctx, "msgToWire: %s", err)
 		return
 	}
 
@@ -255,7 +301,9 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, session *H
 	if suppress {
 		suppressedMsg = " SUPPRESSED"
 	}
-	session.LogInfo(ctx, "Response #%d (%db wire%s) %s in %s %s", session.Transactions, wirelen, suppressedMsg, reqtype, time.Since(reqStart), filteredJSON)
+	if !silentLog {
+		session.LogInfo(ctx, "Response #%d (%db wire%s) %s in %s %s", session.Transactions, wirelen, suppressedMsg, reqtype, time.Since(reqStart), filteredJSON)
+	}
 
 	// Done
 	return
@@ -271,7 +319,7 @@ func HubErrorResponse(ctx context.Context, session *HubSession, errorMessage str
 
 	// Create a response message
 	rsp.Version = currentProtocolVersion
-	rsp.Error = errorMessage
+	rsp.Error = TruncateErrorString(errorMessage, maxProtobufStringLength)
 
 	// Convert to on-wire format
 	response, wirelen, err := msgToWire(rsp)
@@ -361,11 +409,14 @@ func processRequest(ctx context.Context, session *HubSession, req notehubMessage
 	case msgCheckpoint:
 		err = hubCheckpoint(ctx, session, req, &rsp, event)
 
+	case msgSocketSend:
+		err = hubSocketSend(ctx, session, req, &rsp, event)
+
 	}
 
 	// If an error, return it this way
 	if err != nil {
-		rsp.Error = fmt.Sprintf("%s", err)
+		rsp.Error = TruncateErrorString(err.Error(), maxProtobufStringLength)
 	}
 
 	return rsp
@@ -373,21 +424,36 @@ func processRequest(ctx context.Context, session *HubSession, req notehubMessage
 
 // Open the endpoint's notebox
 func openHubNoteboxForDevice(ctx context.Context, session *HubSession, deviceUID string, deviceSN string, productUID string, endpointID string, event EventFunc) (box *Notebox, appUID string, err error) {
+	timerName := timerBegin(ctx, "openNoteboxForDevice")
+	defer timerEnd(ctx, timerName)
+
+	// Warn if this take too long; it should be a few milliseconds
+	start := time.Now()
+	defer func() {
+		if time.Since(start) > time.Second {
+			session.LogWarn(ctx, "[timewarn] excessively long time to open the notebox: %s", time.Since(start))
+		}
+	}()
+
 	// Ensure that hub endpoint is available
 	var hubEndpointID, deviceStorageObject string
-	_, hubEndpointID, appUID, deviceStorageObject, err = HubDiscover(deviceUID, deviceSN, productUID)
+	timerName = timerBegin(ctx, "hubDiscover")
+	hubEndpointID, appUID, deviceStorageObject, err = HubDiscover(deviceUID, deviceSN, productUID, appUID)
+	timerEnd(ctx, timerName)
 	if err != nil {
 		return
 	}
 
 	// Open the endpoint's box on behalf of the Notehub, because we can't open it directly under the device endpoint IDs
+	timerName = timerBegin(ctx, "openNotebox`")
 	box, err = OpenEndpointNotebox(ctx, hubEndpointID, deviceStorageObject, true)
+	timerEnd(ctx, timerName)
 	if err != nil {
 		return
 	}
 
 	// Set the default notification context for files opened within this box instance
-	box.SetEventInfo(deviceUID, deviceSN, productUID, appUID, event, session)
+	box.SetEventInfo(deviceUID, deviceSN, productUID, appUID, session.Session.Transport, event, session)
 
 	// If we haven't yet enum'ed the notefiles, do so
 	sawNotefile(session, box, "")
@@ -434,6 +500,8 @@ func sawNotefile(session *HubSession, box *Notebox, notefileID string) {
 // HighPowerSecsGPS is an indication (a maximum size on device) to return the binary as a binary payload
 // SessionTrigger is MD5 (in both directions)
 // MaxChanges on the response is the HTTP status code
+// Since has the time of the request (if not present because old firmware, the time of the special "web" note is used)
+// Until is the crc16 of the binary template encoded in this transaction
 func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	if fnHubWebRequest == nil {
 		return fmt.Errorf("no web request handler has been set " + note.ErrHubNoHandler)
@@ -446,7 +514,8 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 	}
 	reqtype := req.NotefileID
 	if reqtype == "" {
-		return fmt.Errorf("web request requires a method")
+		// Added 2024-12-13 to optimize on-wire traffic for HAAS
+		reqtype = "POST"
 	}
 	reqcontent := req.MotionOrientation
 	reqmaxbytes := int(req.MotionSecs)
@@ -454,15 +523,39 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 	totalPayloadLen := int(req.HighPowerSecsTotal)
 	payloadOffset := int(req.HighPowerSecsData)
 
-	// Unpack the notefile that contains the special note
+	// Unpack the notefile that contains the special note.  Note that
+	// if there is no notefile in the protobuf, this still returns a
+	// valid but empty notefile.
 	notefile, err := req.GetNotefile()
 	if err != nil {
 		return err
 	}
+
+	// For newer firmware, extract the 'when' from the protobuf
+	reqwhen := req.Since
+
+	// If the binary in the payload is template-encoded, its CRC16 is in the Until field
+	payloadTemplateCrc16 := uint16(uint32(req.Until))
+
+	// Handle the case where there are no notes in the notefile,
+	// which is the super-optimized case (for HAAS) where all
+	// that exists on-wire is the protobuf
 	specialNoteID := "web"
-	snote, err := notefile.GetNote(specialNoteID)
-	if err != nil {
-		return err
+	specialNoteIDTemplate := "template"
+	var snote, tnote note.Note
+	if notefile.CountNotes(true) != 0 {
+		snote, err = notefile.GetNote(specialNoteID)
+		if err != nil {
+			return err
+		}
+		if reqwhen == 0 {
+			reqwhen = snote.When()
+		}
+		tnote, err = notefile.GetNote(specialNoteIDTemplate)
+		if err == nil {
+			session.BinTemplateJSON = tnote.GetBody()
+			session.BinTemplateCrc16 = payloadTemplateCrc16
+		}
 	}
 	notefile.Close()
 
@@ -482,7 +575,9 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 	// Decompress the payload if requested to do so.  Note that we tunnel this indication through
 	// the SessionIDMismatch flag which was a convenient bool in the protobuf.
 	if req.SessionIDMismatch {
+		timerName := timerBegin(ctx, "snappyDecode")
 		snote.Payload, err = snappy.Decode(nil, snote.Payload)
+		timerEnd(ctx, timerName)
 		if err != nil {
 			return err
 		}
@@ -495,30 +590,51 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 		}
 	}
 
-	// If a segmented payload upload has been requested (as indicated by HighPowerSecsTotal in wire protocol)
+	// A segmented payload upload request is indicated by totalPayloadLen being specified
 	if totalPayloadLen == 0 {
-		// If not requesting a segmented upload, clear any pending retained payload
-		session.PendingWebPayload = []byte{}
-	} else if len(snote.Payload) > 0 {
 
-		// It would be absurd for a developer to be sending this much data, but in the
-		// spirit of defensive coding let's make sure they don't do crazy things.
+		// We're not requesting a segmented upload, so clear any pending retained payload
+		session.PendingWebPayload = []byte{}
+
+	} else {
+
+		// For robustness in segmented payload processing, we follow these strict rules:
+		// 1. Allow a 0 length writes as a way just to truncate lengths and proceed with a pending upload
+		// 2. If someone tries to upload more than the totalPayloadLen, FIX the indicated totalPayloadLen
+		//    just to be forgiving to the developer
+		// 3. If there would be a gap in the uploaded data becase offset is > pending length, it's an error
+		// 4. If the offset is <= pending length, just truncate it because we may simply be retrying an upload
+		// 5. If the pending length is > an updated totalPayloadLen, just truncate pending length and proceed
+		//    because this is a valid way to 'terminate' a segmented payload upload being appended-to
+
+		// (2) above
+		if payloadOffset+len(snote.Payload) > totalPayloadLen {
+			totalPayloadLen = payloadOffset + len(snote.Payload)
+		}
+
+		// Enforce the maximum amount we allow for segmented payloads.  Note that there's nothing
+		// special about this number except to keep memory usage in check.  If a customer needs more,
+		// within reason, we could certainly consider it and update this number as it really is
+		// just temporary storage that should be freed pretty quickly in practice.
 		maxPayloadLen := 10000000
 		if totalPayloadLen > maxPayloadLen {
 			session.PendingWebPayload = []byte{}
 			return fmt.Errorf("segmented payloads are limited to %d bytes (%d requested) ", maxPayloadLen, totalPayloadLen)
 		}
 
-		// If this is the first segment, clear out the pending payload
-		if payloadOffset == 0 {
-			session.PendingWebPayload = []byte{}
+		// (3) above (making sure we only do this iff we actually uploaded data to be appended)
+		if len(snote.Payload) > 0 && payloadOffset > len(session.PendingWebPayload) {
+			return fmt.Errorf("segmented payloads must be uploaded without gaps (%d already uploaded but offset is %d) "+note.ErrWebPayload, len(session.PendingWebPayload), payloadOffset)
 		}
 
-		// Validate that the payload segments are arriving in-order as indicated by offset
-		if payloadOffset != len(session.PendingWebPayload) {
-			actual := len(session.PendingWebPayload)
-			session.PendingWebPayload = []byte{}
-			return fmt.Errorf("segmented payloads must be uploaded in exact order (%d already uploaded but offset is %d) "+note.ErrWebPayload, actual, payloadOffset)
+		// (4) above (making sure we only do this iff we actually uploaded data to be appended)
+		if len(snote.Payload) > 0 && payloadOffset < len(session.PendingWebPayload) {
+			session.PendingWebPayload = session.PendingWebPayload[:payloadOffset]
+		}
+
+		// (5) above
+		if len(session.PendingWebPayload) > totalPayloadLen {
+			session.PendingWebPayload = session.PendingWebPayload[:totalPayloadLen]
 		}
 
 		// Append this chunk to the pending web payload
@@ -529,7 +645,7 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 			rsp.MaxChanges = http.StatusContinue
 			notefile = CreateNotefile(false)
 			snote, _ = note.CreateNote(nil, nil)
-			_, err = notefile.AddNote(req.DeviceEndpointID, specialNoteID, snote)
+			_, err = notefile.AddNote(ctx, req.DeviceEndpointID, specialNoteID, snote)
 			if err != nil {
 				err = fmt.Errorf("addNote error when pending payload: %w", err)
 				return
@@ -542,23 +658,53 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 			return
 		}
 
-		// If we've received too much, indicate so
-		if len(session.PendingWebPayload) > totalPayloadLen {
-			actual := len(session.PendingWebPayload)
-			session.PendingWebPayload = []byte{}
-			return fmt.Errorf("too much total segmented data received (%d actual, %d expected) "+note.ErrWebPayload, actual, totalPayloadLen)
-		}
-
 		// We've completed assembling the payload, so proceed with the web request
 		snote.Payload = session.PendingWebPayload
 		session.PendingWebPayload = []byte{}
 
 	}
 
+	// If there's a template, transfer the payload to a special "decoded" body subfield
+	if payloadTemplateCrc16 != 0 {
+		bulkContext, err := BulkDecodeTemplate(session.BinTemplateJSON, snote.Payload)
+		if err != nil {
+			return err
+		}
+		events := []note.Event{}
+		timerName := timerBegin(ctx, "bulkDecode")
+		for {
+			body, payload, when, wherewhen, olc, _, success := bulkContext.BulkDecodeNextEntry()
+			if !success {
+				break
+			}
+			event := note.Event{}
+			event.When = when
+			if olc != "" {
+				area, err := golc.Decode(olc)
+				if err == nil {
+					event.WhereLat, event.WhereLon = area.Center()
+					event.WhereWhen = wherewhen
+				}
+			}
+			event.Body = &body
+			event.Payload = payload
+			events = append(events, event)
+		}
+		timerEnd(ctx, timerName)
+		if len(events) > 0 {
+			if snote.Body == nil {
+				snote.Body = map[string]interface{}{}
+			}
+			snote.Body["decoded"] = events
+			session.LogInfo(ctx, "[webreq] %d events (packed into %d bytes) tunneled through %s", len(events), len(snote.Payload), alias)
+		}
+		snote.Payload = []byte{}
+	}
+
 	// Process web requests asynchronously if desired
 	if req.SuppressResponse {
 		go func() {
-			_, _, _, _, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, snote.GetBody(), snote.Payload)
+			_, _, _, _, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, reqwhen, snote.GetBody(), snote.Payload)
 			if err != nil {
 				logInfo(ctx, "error during async web request: %s", err)
 			}
@@ -568,9 +714,11 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 
 	// Perform the web request.  If an error occurs, place the result in rsp.Error but
 	// continue processing the transaction.
-	statuscode, rspHeader, rspBodyJSON, rspPayload, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, snote.GetBody(), snote.Payload)
+	timerName := timerBegin(ctx, "webRequest")
+	statuscode, rspHeader, rspBodyJSON, rspPayload, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, reqwhen, snote.GetBody(), snote.Payload)
+	timerEnd(ctx, timerName)
 	if err != nil {
-		rsp.Error = fmt.Sprintf("%s", err)
+		rsp.Error = TruncateErrorString(err.Error(), maxProtobufStringLength)
 	}
 
 	// If there's a payload, return its MD5 to the caller so the device can check for corruption
@@ -611,7 +759,7 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 	}
 
 	// Add the note to the notefile and add it to the response message
-	_, err = notefile.AddNote(req.DeviceEndpointID, specialNoteID, snote)
+	_, err = notefile.AddNote(ctx, req.DeviceEndpointID, specialNoteID, snote)
 	if err != nil {
 		return err
 	}
@@ -649,6 +797,21 @@ func hubSignal(ctx context.Context, session *HubSession, req notehubMessage, rsp
 	return
 }
 
+// Perform Websock Send
+func hubSocketSend(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
+
+	// Get the payload
+	payload := req.GetPayload()
+
+	// If there's a socket open, transmit it
+	if session.SocketTransmit != nil {
+		err = session.SocketTransmit(ctx, session, payload)
+	}
+
+	// Done
+	return
+}
+
 // Get Notification message
 func hubGetNotification(ctx context.Context, session *HubSession, msg notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// These conditions should never happen
@@ -662,24 +825,40 @@ func hubGetNotification(ctx context.Context, session *HubSession, msg notehubMes
 		return fmt.Errorf("device monitoring is not active")
 	}
 
-	// Get the changes pending
-	changes := fnHubNotifications(ctx, msg.DeviceEndpointID, session)
+	// Get the notifications pending
+	notifications := fnHubNotifications(ctx, msg.DeviceEndpointID, session)
 
-	// Turn the changes into a payload
-	payload := []byte(strings.Join(changes, "\n"))
+	// Sort the notifications into notifications and websocket binary segments to be returned as a payload
+	payload := []byte{}
+	signals := []string{}
+	for _, notification := range notifications {
+		payloadBytes, isPayload := payloadFromString(notification)
+		if isPayload {
+			payload = append(payload, payloadBytes...)
+		} else {
+			signals = append(signals, notification)
+		}
+	}
+
+	// If we've got a payload, return it
 	if len(payload) > 0 {
+		rsp.SetPayload(payload)
+	}
 
-		// Add the payload to a special notefile
-		var snote note.Note
-		snote, err = note.CreateNote(nil, payload)
-		if err == nil {
-			notefile := CreateNotefile(false)
-			_, err = notefile.AddNote(msg.DeviceEndpointID, "signal", snote)
+	// If we've got notifications, return them within a notefile
+	if len(signals) > 0 {
+		notePayload := []byte(strings.Join(signals, "\n"))
+		if len(notePayload) > 0 {
+			var snote note.Note
+			snote, err = note.CreateNote(nil, notePayload)
 			if err == nil {
-				err = rsp.SetNotefile(notefile)
+				notefile := CreateNotefile(false)
+				_, err = notefile.AddNote(ctx, msg.DeviceEndpointID, "signal", snote)
+				if err == nil {
+					err = rsp.SetNotefile(notefile)
+				}
 			}
 		}
-
 	}
 
 	return
@@ -718,7 +897,7 @@ func hubDiscovery(ctx context.Context, session *HubSession, msg notehubMessage, 
 			xnote, err := note.CreateNote(nil, discinfo.HubCert)
 			if err == nil {
 				noteID := "result"
-				_, err = newNotefile.AddNote(discinfo.HubEndpointID, noteID, xnote)
+				_, err = newNotefile.AddNote(ctx, discinfo.HubEndpointID, noteID, xnote)
 				if err == nil {
 					if rsp.SetNotefile(newNotefile) == nil {
 						rsp.NoteID = noteID
@@ -863,6 +1042,7 @@ func hubNotefileChanges(ctx context.Context, session *HubSession, req notehubMes
 
 // Notefile Merge
 func hubNotefileMerge(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
+
 	// Open the box
 	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
@@ -880,7 +1060,7 @@ func hubNotefileMerge(ctx context.Context, session *HubSession, req notehubMessa
 	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
+	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
 
 	// Unmarshal the notefile
 	notefile, err5 := req.GetNotefile()
@@ -892,7 +1072,7 @@ func hubNotefileMerge(ctx context.Context, session *HubSession, req notehubMessa
 	}
 
 	// Merge the tracked changes
-	err = file.MergeNotefile(notefile)
+	err = file.MergeNotefile(ctx, notefile)
 	if err != nil {
 		openfile.Close(ctx)
 		box.Close(ctx)
@@ -939,10 +1119,10 @@ func hubNotefilesMerge(ctx context.Context, session *HubSession, req notehubMess
 		sawNotefile(session, box, NotefileID)
 
 		// Set the notification context
-		file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
+		file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
 
 		// Merge the tracked changes
-		err = file.MergeNotefile(chgfile)
+		err = file.MergeNotefile(ctx, chgfile)
 		if err != nil {
 			openfile.Close(ctx)
 			box.Close(ctx)
@@ -998,6 +1178,7 @@ func hubNotefileUpdateChangeTracker(ctx context.Context, session *HubSession, re
 
 // Notebox Summary
 func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
+
 	// Open the box
 	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
@@ -1006,9 +1187,10 @@ func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMess
 	}
 
 	// Validate the session ID, and delete all local trackers to force resync if we've gotten out of sync
-	// Then, flush the notebox to ensure that if this session for this device drops, that a follow-on session
-	// starting in another handler will pick up the proper sessionID so that it doesn't need to do a full sync.
+	// Note that this session ID will be flushed by our 5 minute checkpoint task and by normal session close.
+	timerName := timerBegin(ctx, "swapTracker")
 	sessionIDPrev := box.Notefile().swapTrackerSessionID(req.DeviceEndpointID, req.SessionIDNext)
+	timerEnd(ctx, timerName)
 	if sessionIDPrev != req.SessionIDPrev {
 		if debugSync {
 			logDebug(ctx, "Reset trackers because of ID mismatch (was %d, expecting %d now %d)", sessionIDPrev, req.SessionIDPrev, req.SessionIDNext)
@@ -1016,19 +1198,19 @@ func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMess
 		box.ClearAllTrackers(ctx, req.DeviceEndpointID)
 		rsp.SessionIDMismatch = true
 	}
-	err2 = box.Checkpoint(ctx)
-	if err2 != nil {
-		logError(ctx, "Error checkpointing notebox: %v", err2)
-	}
 
 	// Set the notification context
-	box.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
+	box.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
 
 	// Update the environment vars for the notebox, which may result in a changed _env.dbs
+	timerName = timerBegin(ctx, "updateEnvVars")
 	hubUpdateEnvVars(ctx, box, req.DeviceUID, appUID, true)
+	timerEnd(ctx, timerName)
 
 	// Get the info
+	timerName = timerBegin(ctx, "getChangedNotefiles")
 	fileChanges := box.GetChangedNotefiles(ctx, req.DeviceEndpointID)
+	timerEnd(ctx, timerName)
 
 	// In an attempt to reduce the use of the buffer below, skim files that are obviously
 	// never going to be "pulled" by the device, regardless of whether or not they were
@@ -1043,18 +1225,9 @@ func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMess
 		}
 	}
 
-	// Return the results so long as they fit within the protocol buffer (see notehub.options).
+	// Return the results truncated to fit within the protocol buffer (see notehub.options).
 	// This is safe because it will simply take multiple passes to sync all of these files.
-	for {
-		rsp.NotefileIDs = strings.Join(fileChanges, ReservedIDDelimiter)
-		if len(rsp.NotefileIDs) < (250 - 10) {
-			break
-		}
-		if len(fileChanges) == 0 {
-			break
-		}
-		fileChanges = fileChanges[:len(fileChanges)-1]
-	}
+	rsp.NotefileIDs = fmt.Sprintf("%.*s", maxProtobufStringLength, strings.Join(fileChanges, ReservedIDDelimiter))
 
 	// Done
 	box.Close(ctx)
@@ -1091,19 +1264,61 @@ func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMes
 	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
+	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
 
-	// Perform the operation
+	// First, extract the body and payload
 	var body []byte
-	ibody, err5 := req.GetBody()
+	bodyObject, err5 := req.GetBody()
 	if err5 != nil {
 		err = err5
 	} else {
-		body, err = note.JSONMarshal(ibody)
+		body, err = note.JSONMarshal(bodyObject)
 	}
+	payload := req.GetPayload()
+
+	// See if this is a special note that has a payload that was encoded with a template specified in the body
+	decodePayloadWithTemplateFlag := uint32(0x00000001)
+	if err == nil && len(payload) > 0 && (req.PowerSource&decodePayloadWithTemplateFlag) != 0 {
+
+		// The template is in the body
+		binTemplateJSON := body
+		body = []byte{}
+		var bulkContext BulkTemplateContext
+		bulkContext, err = BulkDecodeTemplate(binTemplateJSON, payload)
+		if err == nil {
+			events := []note.Event{}
+			for {
+				noteBody, notePayload, when, wherewhen, olc, _, success := bulkContext.BulkDecodeNextEntry()
+				if !success {
+					break
+				}
+				event := note.Event{}
+				event.When = when
+				if olc != "" {
+					area, err := golc.Decode(olc)
+					if err == nil {
+						event.WhereLat, event.WhereLon = area.Center()
+						event.WhereWhen = wherewhen
+					}
+				}
+				event.Body = &noteBody
+				event.Payload = notePayload
+				events = append(events, event)
+			}
+			if len(events) > 0 {
+				bodyObject := map[string]interface{}{}
+				bodyObject["decoded"] = events
+				body, err = note.JSONMarshal(bodyObject)
+			}
+			payload = []byte{}
+		}
+
+	}
+
+	// Add the note to the notefile
 	if err == nil {
 		var newNote note.Note
-		newNote, err = note.CreateNote(body, req.GetPayload())
+		newNote, err = note.CreateNote(body, payload)
 		if err == nil {
 
 			// Set the note's time and location
@@ -1112,7 +1327,7 @@ func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMes
 			newNote.Histories = &histories
 
 			// Add the note to the notefile with history set up here
-			_, err = file.AddNoteWithHistory(req.DeviceEndpointID, req.NoteID, newNote)
+			_, err = file.AddNoteWithHistory(ctx, req.DeviceEndpointID, req.NoteID, newNote)
 			if err == nil {
 
 				// If this is an outbound queue, purge ALL tombstones from the
@@ -1157,10 +1372,10 @@ func hubNotefileDeleteNote(ctx context.Context, session *HubSession, req notehub
 	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
+	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
 
 	// Perform the operation
-	err = file.DeleteNote(req.DeviceEndpointID, req.NoteID)
+	err = file.DeleteNote(ctx, req.DeviceEndpointID, req.NoteID)
 	if err != nil {
 		openfile.Close(ctx)
 		box.Close(ctx)
@@ -1193,7 +1408,7 @@ func hubNotefileUpdateNote(ctx context.Context, session *HubSession, req notehub
 	sawNotefile(session, box, req.NotefileID)
 
 	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, event, session)
+	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
 
 	// Perform the operation
 	xnote, err5 := file.GetNote(req.NoteID)
@@ -1218,7 +1433,7 @@ func hubNotefileUpdateNote(ctx context.Context, session *HubSession, req notehub
 		}
 	}
 	if err == nil {
-		err = file.UpdateNote(req.DeviceEndpointID, req.NoteID, xnote)
+		err = file.UpdateNote(ctx, req.DeviceEndpointID, req.NoteID, xnote)
 	}
 
 	// Done
@@ -1264,6 +1479,12 @@ func hubReadFile(ctx context.Context, session *HubSession, req notehubMessage, r
 		return
 	}
 
+	// locally we have bogus firmware that's created for testing the UI.
+	// if any device tries to update to this firmware, always return an error
+	if metadata.Firmware != nil && metadata.Firmware.Description == notehub.TestFirmwareString {
+		return fmt.Errorf("this firmware is invalid and created for testing purposes only")
+	}
+
 	// If we'd like the binary returned uncompressed as the response payload, do so
 	if returnUncompressedBinary {
 		rsp.SetPayload(payload)
@@ -1286,7 +1507,7 @@ func hubReadFile(ctx context.Context, session *HubSession, req notehubMessage, r
 		box.Close(ctx)
 		return
 	}
-	_, err = newNotefile.AddNote(req.DeviceEndpointID, "result", xnote)
+	_, err = newNotefile.AddNote(ctx, req.DeviceEndpointID, "result", xnote)
 	if err != nil {
 		box.Close(ctx)
 		return
@@ -1379,6 +1600,42 @@ func msgTypeName(msgType string) string {
 		return "HubSignal"
 	case msgCheckpoint:
 		return "Checkpoint"
+	case msgSocketSend:
+		return "HubSocketSend"
 	}
 	return "(" + msgType + ")"
+}
+
+// Truncate an error string, moving errors to the front if it's too long
+func TruncateErrorString(errstr string, maxchars int) string {
+	if len(errstr) <= maxchars {
+		return errstr
+	}
+	re := regexp.MustCompile(`\{[^}]*\}`)
+	matches := re.FindAllString(errstr, -1)
+	if len(matches) > 0 {
+		errstr = strings.TrimSpace(re.ReplaceAllString(errstr, ""))
+		errstr = fmt.Sprintf("%s %s", strings.Join(matches, ""), errstr)
+	}
+	return fmt.Sprintf("%.*s", maxchars, errstr)
+}
+
+// Used to send []byte messages as strings in devmon
+const payloadPrefix = "bytes:"
+
+// Convert payload to a string
+func PayloadToString(payload []byte) string {
+	return payloadPrefix + base64.StdEncoding.EncodeToString(payload)
+}
+
+// Convert string to a payload
+func payloadFromString(in string) ([]byte, bool) {
+	if !strings.HasPrefix(in, payloadPrefix) {
+		return []byte{}, false
+	}
+	payload, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(in, payloadPrefix))
+	if err != nil {
+		return []byte{}, false
+	}
+	return payload, true
 }

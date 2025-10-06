@@ -8,6 +8,7 @@ package notelib
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -74,10 +75,11 @@ func fileioCreate(ctx context.Context, path string) (err error) {
 
 // Write an existing JSON file
 func fileioWriteJSON(ctx context.Context, path string, data []byte) (err error) {
+	_ = os.MkdirAll(filepath.Dir(path), 0777)
 	fd, err2 := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o666)
 	if err2 != nil {
-		logError(ctx, "fileioWrite: error creating %s: %s", path, err)
 		err = err2
+		logError(ctx, "fileioWrite: error creating %s: %s", path, err)
 		return
 	}
 

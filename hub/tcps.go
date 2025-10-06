@@ -49,10 +49,6 @@ func tcpsHandler() {
 
 	// Append STSAFE PRODUCTION cert
 	deviceCA := notelib.GetNotecardSecureElementRootCertificateAsPEM()
-	if err != nil {
-		fmt.Printf("tcps: error opening cert for device verification: %s\n", err)
-		return
-	}
 	deviceCertPool.AppendCertsFromPEM(deviceCA)
 
 	// Build from cert pool
@@ -145,8 +141,8 @@ func (l *tlsListener) Accept() (net.Conn, error) {
 
 	// Set keepalive timers that cause TCP-level pings to be sent
 	tcpc := c.(*net.TCPConn)
-	tcpc.SetKeepAlive(true)
-	tcpc.SetKeepAlivePeriod(15 * time.Minute)
+	_ = tcpc.SetKeepAlive(true)
+	_ = tcpc.SetKeepAlivePeriod(15 * time.Minute)
 
 	// Initiate the session
 	conn := tls.Server(c, l.config)
@@ -190,7 +186,7 @@ func tlsAuthenticate(connSession net.Conn, device DeviceState) (err error) {
 	// If it's never been set, set it now
 	if device.DeviceDN == "" {
 		device.DeviceDN = deviceDN
-		deviceSet(device)
+		_ = deviceSet(device)
 		fmt.Printf("tcp: first-time auth of %s as %s\n", device.DeviceUID, deviceDN)
 	} else {
 		fmt.Printf("tcp: authenticated %s as %s\n", device.DeviceUID, deviceDN)

@@ -301,7 +301,7 @@ func newHistory(endpointID string, when int64, where string, wherewhen int64, se
 	newHistory.EndpointID = endpointID
 
 	if when == 0 {
-		newHistory.When = createNoteTimestamp(endpointID)
+		newHistory.When = createNoteTimestamp()
 	} else {
 		newHistory.When = when
 	}
@@ -440,20 +440,10 @@ func copyNote(xnote *note.Note) note.Note {
 	return newNote
 }
 
-// Return the current timestamp to be used for "when", in milliseconds
-var lastTimestamp int64
-
-func createNoteTimestamp(endpointID string) int64 {
-	// Return the later of the current time (in seconds) and the last one that we handed out
-	thisTimestamp := time.Now().UTC().UnixNano() / 1000000000
-	if thisTimestamp <= lastTimestamp {
-		lastTimestamp++
-		thisTimestamp = lastTimestamp
-	} else {
-		lastTimestamp = thisTimestamp
-	}
-
-	return thisTimestamp
+// because we only have second-level resolution, some notes can be created
+// with the same captured date which might screw up ordering in some cases
+func createNoteTimestamp() int64 {
+	return time.Now().UTC().Unix()
 }
 
 // compareNoteTimestamps is a standard Compare function

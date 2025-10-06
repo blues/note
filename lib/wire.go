@@ -25,6 +25,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Automatic attempts to fix corrupt JSON enabled/disabled.  (See wire_test.go and hubreq.go for more information.)
+const fixCorruptJson = true
+
 // Available JSON compression formats.
 const (
 	jc0       = byte(0) // no compression
@@ -54,6 +57,14 @@ const (
 
 // Debug
 var debugWireRead = false
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 // Method to scan for the longest json field value within the buffer, for JSON field/value substitution,
 // optimized for large ints (unix date values) or string with common prefixes
@@ -218,17 +229,54 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 
 // Decompress a byte array known to contain JSON.  Note that we support 08 as of 11/01/2020.
 func jsonDecompress(compressed []byte) (normal []byte, err error) {
+	return jsonDecompressTrace(compressed, false)
+}
+
+// jsonDecompressTrace decompresses with optional verbose debugging output
+func jsonDecompressTrace(compressed []byte, trace bool) (normal []byte, err error) {
+	if trace {
+		fmt.Printf("\n  >>> Entering jsonDecompress with %d bytes\n", len(compressed))
+		fmt.Printf("  First 16 bytes: % x\n", compressed[:min(len(compressed), 16)])
+	}
+
 	// Remove header byte
 	if len(compressed) == 0 {
-		return nil, fmt.Errorf("json decompression error: 0-length data")
+		err = fmt.Errorf("json decompression error: 0-length data")
+		if trace {
+			fmt.Printf("  ERROR: 0-length data\n")
+		}
+		return nil, err
 	}
 
 	compressionType := compressed[0]
+	if trace {
+		fmt.Printf("  Compression type: 0x%02x", compressionType)
+		switch compressionType {
+		case jc0:
+			fmt.Printf(" (jc0 - no compression)\n")
+		case jc1:
+			fmt.Printf(" (jc1 - JSON string substitution only)\n")
+		case jc2:
+			fmt.Printf(" (jc2 - JSON string substitution + Snappy)\n")
+		case jc3:
+			fmt.Printf(" (jc3 - Custom subst table + JSON string substitution + Snappy)\n")
+		default:
+			fmt.Printf(" (UNKNOWN!)\n")
+		}
+	}
+
 	compressed = compressed[1:]
+	if trace {
+		fmt.Printf("  After removing header: %d bytes\n", len(compressed))
+	}
 
 	// Dispatch based on compression type
 	if compressionType == jc0 {
 		normal = compressed
+		if trace {
+			fmt.Printf("  No decompression needed, returning %d bytes\n", len(normal))
+			fmt.Printf("  <<< Exiting jsonDecompress\n")
+		}
 
 		// Debug
 		if debugCompress {
@@ -243,13 +291,28 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 
 	sdecompressed := compressed
 	if compressionType == jc1 {
+		if trace {
+			fmt.Printf("  jc1: JSON substitution only\n")
+		}
 		// only json
 	} else if compressionType == jc2 || compressionType == jc3 {
+		if trace {
+			fmt.Printf("  Applying Snappy decompression...\n")
+			fmt.Printf("  Input to Snappy: %d bytes\n", len(compressed))
+		}
 
 		// Snappy decompress
 		sdecompressed, err = snappy.Decode(nil, compressed)
 		if err != nil {
+			if trace {
+				fmt.Printf("  ERROR in Snappy decode: %v\n", err)
+			}
 			return nil, fmt.Errorf("json decompression decode error: %s", err)
+		}
+
+		if trace {
+			fmt.Printf("  Snappy decompressed from %d to %d bytes\n", len(compressed), len(sdecompressed))
+			fmt.Printf("  First 64 bytes after Snappy: %s\n", string(sdecompressed[:min(len(sdecompressed), 64)]))
 		}
 
 		if debugCompress {
@@ -257,61 +320,160 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 		}
 
 	} else {
-		return nil, fmt.Errorf("json decompression error: unknown compression type: 0x%02x", compressionType)
+		err = fmt.Errorf("json decompression error: unknown compression type: 0x%02x", compressionType)
+		if trace {
+			fmt.Printf("  ERROR: Unknown compression type\n")
+		}
+		return nil, err
 	}
 
 	// JSON decompress
+	if trace {
+		fmt.Printf("\n  --- JSON decompression phase ---\n")
+	}
 
 	var jdecompressed []byte
 	if compressionType == jc3 {
+		if trace {
+			fmt.Printf("  jc3: Processing substitution table...\n")
+		}
 
 		// Compute the total length of the subst table, and copy all strings to an array
 		fromto := []string{}
 		substTableEntries := sdecompressed[0]
+		if trace {
+			fmt.Printf("  Substitution table entries: %d\n", substTableEntries)
+		}
+
 		substTableLen := 1 + (substTableEntries * 2)
 		substLenTableOffset := 1
 		substStringsOffset := substTableLen
+
+		if trace {
+			fmt.Printf("  Reading substitution table...\n")
+		}
 		for i := 0; i < int(substTableEntries*2); i++ {
 			stringLen := sdecompressed[substLenTableOffset+i]
-			substStr := string(sdecompressed[substStringsOffset:(substStringsOffset + stringLen)])
+			substBytes := sdecompressed[substStringsOffset:(substStringsOffset + stringLen)]
+			substStr := string(substBytes)
 			fromto = append(fromto, substStr)
+
+			if trace {
+				if i%2 == 0 {
+					fmt.Printf("    Entry %d: from=%q %X (%d bytes)", i/2, substStr, substBytes, stringLen)
+				} else {
+					fmt.Printf(" to=%q %X (%d bytes)\n", substStr, substBytes, stringLen)
+				}
+			}
+
 			substStringsOffset += stringLen
 			substTableLen += stringLen
+		}
+		if trace {
+			fmt.Printf("  Substitution table total length: %d bytes\n%X\n", substTableLen, sdecompressed[1:substTableLen+1])
 		}
 
 		// Eliminate the subst table from the output buffer
 		sdecompressed = sdecompressed[substTableLen:]
+		if trace {
+			fmt.Printf("  After removing subst table: %d bytes\n", len(sdecompressed))
+		}
 		str := string(sdecompressed)
 
 		// Perform the hard-wired substitutions
+		if trace {
+			fmt.Printf("\n  Performing hard-wired substitutions...\n")
+		}
+		original := str
 		str = strings.Replace(str, to8, from8, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to8, from8)
+		}
+		original = str
 		str = strings.Replace(str, to7, from7, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to7, from7)
+		}
+		original = str
 		str = strings.Replace(str, to6, from6, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to6, from6)
+		}
+		original = str
 		str = strings.Replace(str, to5, from5, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to5, from5)
+		}
+		original = str
 		str = strings.Replace(str, to4, from4, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to4, from4)
+		}
+		original = str
 		str = strings.Replace(str, to3, from3, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to3, from3)
+		}
 
 		// Perform the reverse substitution from "to" to "from", in reverse order
+		if trace {
+			fmt.Printf("\n  Performing custom substitutions in reverse order...\n")
+		}
 		for i := int(substTableEntries); i > 0; i-- {
 			from := fromto[((i-1)*2)+0]
 			to := fromto[((i-1)*2)+1]
 			if len(from) > 0 {
+				original := str
 				str = strings.Replace(str, to, from, -1)
+				if trace && str != original {
+					fmt.Printf("    Entry %d: Replaced %q -> %q\n", i-1, to, from)
+				}
 			}
 		}
 		jdecompressed = []byte(str)
 
 	} else {
-
+		if trace {
+			fmt.Printf("  Performing standard JSON substitutions...\n")
+		}
 		str := string(sdecompressed)
+		original := str
 		str = strings.Replace(str, to8, from8, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to8, from8)
+		}
+		original = str
 		str = strings.Replace(str, to7, from7, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to7, from7)
+		}
+		original = str
 		str = strings.Replace(str, to6, from6, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to6, from6)
+		}
+		original = str
 		str = strings.Replace(str, to5, from5, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to5, from5)
+		}
+		original = str
 		str = strings.Replace(str, to4, from4, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to4, from4)
+		}
+		original = str
 		str = strings.Replace(str, to3, from3, -1)
+		if trace && str != original {
+			fmt.Printf("    Replaced %q -> %q\n", to3, from3)
+		}
 		jdecompressed = []byte(str)
 
+	}
+
+	if trace {
+		fmt.Printf("\n  JSON decompressed from %d to %d bytes:\n", len(sdecompressed), len(jdecompressed))
+		fmt.Printf("\n%s\n\n", string(jdecompressed))
 	}
 
 	// Debug
@@ -320,6 +482,9 @@ func jsonDecompress(compressed []byte) (normal []byte, err error) {
 	}
 
 	normal = jdecompressed
+	if trace {
+		fmt.Printf("  <<< Exiting jsonDecompress with %d bytes\n", len(normal))
+	}
 	return
 }
 
@@ -509,6 +674,15 @@ func (msg *notehubMessage) GetPayload() (payload []byte) {
 
 // wireReadVersionByte reads the initial byte of a stream to validate version
 func wireProcessVersionByte(version byte) (isValid bool, headerLength int) {
+	return wireProcessVersionByteTrace(version, false)
+}
+
+// wireProcessVersionByteTrace processes version byte with optional verbose debugging output
+func wireProcessVersionByteTrace(version byte, trace bool) (isValid bool, headerLength int) {
+	if trace {
+		fmt.Printf("  wireProcessVersionByte: version=0x%02x (%d)\n", version, version)
+	}
+
 	switch version {
 
 	// 1 byte version == 0
@@ -517,6 +691,9 @@ func wireProcessVersionByte(version byte) (isValid bool, headerLength int) {
 	// 0 bytes protobuf
 	// 0 bytes binary
 	case 0:
+		if trace {
+			fmt.Printf("    Version 0: no header\n")
+		}
 		return true, 0
 
 		// 1 byte version == 1
@@ -525,6 +702,9 @@ func wireProcessVersionByte(version byte) (isValid bool, headerLength int) {
 		// N bytes protobuf
 		// N bytes binary
 	case 1:
+		if trace {
+			fmt.Printf("    Version 1: 2-byte header (1 byte protobuf len, 1 byte binary len)\n")
+		}
 		return true, 2
 
 		// 1 byte version == 2
@@ -533,6 +713,9 @@ func wireProcessVersionByte(version byte) (isValid bool, headerLength int) {
 		// N bytes protobuf
 		// N bytes binary
 	case 2:
+		if trace {
+			fmt.Printf("    Version 2: 3-byte header (1 byte protobuf len, 2 bytes binary len)\n")
+		}
 		return true, 3
 
 		// 1 byte version == 3
@@ -541,6 +724,9 @@ func wireProcessVersionByte(version byte) (isValid bool, headerLength int) {
 		// N bytes protobuf
 		// N bytes binary
 	case 3:
+		if trace {
+			fmt.Printf("    Version 3: 4-byte header (2 bytes protobuf len, 2 bytes binary len)\n")
+		}
 		return true, 4
 
 		// 1 byte version == 4
@@ -549,16 +735,25 @@ func wireProcessVersionByte(version byte) (isValid bool, headerLength int) {
 		// N bytes protobuf
 		// N bytes binary
 	case 4:
+		if trace {
+			fmt.Printf("    Version 4: 8-byte header (4 bytes protobuf len, 4 bytes binary len)\n")
+		}
 		return true, 8
 
 		// 1 byte version == 5
 		// 4 byte binary length
 		// N bytes binary
 	case 5:
+		if trace {
+			fmt.Printf("    Version 5: 4-byte header (4 bytes binary len only)\n")
+		}
 		return true, 4
 
 	}
 
+	if trace {
+		fmt.Printf("    INVALID VERSION!\n")
+	}
 	return false, 0
 }
 
@@ -735,6 +930,21 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 	if msg.Temp1000 != 0 {
 		pb.Temp1000 = &msg.Temp1000
 	}
+	if msg.PowerSource != 0 {
+		pb.PowerSource = &msg.PowerSource
+	}
+	if msg.PowerMahUsed != 0 {
+		pb.PowerMahUsed = &msg.PowerMahUsed
+	}
+	if msg.PenaltySecs != 0 {
+		pb.PenaltySecs = &msg.PenaltySecs
+	}
+	if msg.FailedConnects != 0 {
+		pb.FailedConnects = &msg.FailedConnects
+	}
+	if msg.SocketAlias != "" {
+		pb.SocketAlias = &msg.SocketAlias
+	}
 	if msg.CellID != "" {
 		pb.CellID = &msg.CellID
 	}
@@ -856,6 +1066,18 @@ func msgToWire(msg notehubMessage) (wire []byte, wirelen int, err error) {
 
 // wireProcessHeader extracts protocol buffer and binary lengths from the header
 func wireReadHeader(version byte, header []byte) (protobufLength int64, binaryLength int64, err error) {
+	return wireReadHeaderTrace(version, header, false)
+}
+
+// wireReadHeaderTrace extracts protocol buffer and binary lengths with optional verbose debugging output
+func wireReadHeaderTrace(version byte, header []byte, trace bool) (protobufLength int64, binaryLength int64, err error) {
+	if trace {
+		fmt.Printf("  wireReadHeader: version=%d, header len=%d\n", version, len(header))
+		if len(header) > 0 {
+			fmt.Printf("    Header bytes: % x\n", header)
+		}
+	}
+
 	var isValidVersion bool
 
 	switch version {
@@ -869,6 +1091,9 @@ func wireReadHeader(version byte, header []byte) (protobufLength int64, binaryLe
 		protobufLength = 0
 		binaryLength = 0
 		isValidVersion = true
+		if trace {
+			fmt.Printf("    Version 0: no data\n")
+		}
 
 		// 1 byte version == 1
 		// 1 byte protobuf length
@@ -879,6 +1104,9 @@ func wireReadHeader(version byte, header []byte) (protobufLength int64, binaryLe
 		protobufLength = int64(header[0])
 		binaryLength = int64(header[1])
 		isValidVersion = true
+		if trace {
+			fmt.Printf("    Version 1: protobuf=%d, binary=%d\n", protobufLength, binaryLength)
+		}
 
 		// 1 byte version == 2
 		// 1 byte protobuf length
@@ -889,6 +1117,9 @@ func wireReadHeader(version byte, header []byte) (protobufLength int64, binaryLe
 		protobufLength = int64(header[0])
 		binaryLength = (int64(header[2]) << 8) | int64(header[1])
 		isValidVersion = true
+		if trace {
+			fmt.Printf("    Version 2: protobuf=%d, binary=%d (16-bit)\n", protobufLength, binaryLength)
+		}
 
 		// 1 byte version == 3
 		// 2 byte protobuf length
@@ -899,6 +1130,9 @@ func wireReadHeader(version byte, header []byte) (protobufLength int64, binaryLe
 		protobufLength = (int64(header[1]) << 8) | int64(header[0])
 		binaryLength = (int64(header[3]) << 8) | int64(header[2])
 		isValidVersion = true
+		if trace {
+			fmt.Printf("    Version 3: protobuf=%d (16-bit), binary=%d (16-bit)\n", protobufLength, binaryLength)
+		}
 
 		// 1 byte version == 4
 		// 4 byte protobuf length
@@ -909,6 +1143,9 @@ func wireReadHeader(version byte, header []byte) (protobufLength int64, binaryLe
 		protobufLength = (int64(header[3]) << 24) | (int64(header[2]) << 16) | (int64(header[1]) << 8) | int64(header[0])
 		binaryLength = (int64(header[7]) << 24) | (int64(header[6]) << 16) | (int64(header[5]) << 8) | int64(header[4])
 		isValidVersion = true
+		if trace {
+			fmt.Printf("    Version 4: protobuf=%d (32-bit), binary=%d (32-bit)\n", protobufLength, binaryLength)
+		}
 
 		// 1 byte version == 5
 		// 4 byte binary length
@@ -917,6 +1154,14 @@ func wireReadHeader(version byte, header []byte) (protobufLength int64, binaryLe
 		protobufLength = 0
 		binaryLength = (int64(header[3]) << 24) | (int64(header[2]) << 16) | (int64(header[1]) << 8) | int64(header[0])
 		isValidVersion = true
+		if trace {
+			fmt.Printf("    Version 5: protobuf=0, binary=%d (32-bit)\n", binaryLength)
+		}
+
+	default:
+		if trace {
+			fmt.Printf("    INVALID VERSION!\n")
+		}
 	}
 
 	if !isValidVersion {
@@ -957,40 +1202,40 @@ func u32min(x, y uint32) uint32 {
 }
 
 // WireBarsFromSession extracts device's perception of the number of bars of signal from a session
-func WireBarsFromSession(session *HubSession) (rat string, bars uint32) {
+func WireBarsFromSession(session *note.DeviceSession) (rat string, bars uint32) {
 	// Return the rat for the session
-	rat = session.Session.Rat
+	rat = session.Rat
 
 	// Start by assuming great coverage
 	bars = 4
 
 	// Handle GSM OR handle LTE at the state when RSRQ can't be computed
-	if session.Session.Rsrq == 0 {
-		if session.Session.Rssi < -70 {
+	if session.Rsrq == 0 {
+		if session.Rssi < -70 {
 			bars = 3
 		}
-		if session.Session.Rssi < -85 {
+		if session.Rssi < -85 {
 			bars = 2
 		}
-		if session.Session.Rssi < -100 {
+		if session.Rssi < -100 {
 			bars = 1
 		}
 		return
 	}
 
 	// RSRP is an integer indicating the reference signal received power in dBm
-	if session.Session.Rsrp < -80 {
+	if session.Rsrp < -80 {
 		bars = u32min(bars, 3)
 	}
-	if session.Session.Rsrp < -90 {
+	if session.Rsrp < -90 {
 		bars = u32min(bars, 2)
 	}
-	if session.Session.Rsrp < -100 {
+	if session.Rsrp < -100 {
 		bars = u32min(bars, 1)
 	}
 	// SINR is an integer indicating the signal to interference plus noise ratio.
 	// The logarithmic values (0-250) are in 1/5th of a dB, ranging from -20 to +30db
-	sinr := -20 + (session.Session.Sinr * 5)
+	sinr := -20 + (session.Sinr * 5)
 	if sinr < 20 {
 		bars = u32min(bars, 3)
 	}
@@ -1003,13 +1248,13 @@ func WireBarsFromSession(session *HubSession) (rat string, bars uint32) {
 	// RSRQ is an integer indicating the reference signal received quality (RSRQ) in dB,
 	// which is computed by the formula RSRQ = N*(RSRP/RSSI), where N is the number of
 	// Resource Blocks of the E-UTRA carrier RSSI
-	if session.Session.Rsrq < -10 {
+	if session.Rsrq < -10 {
 		bars = u32min(bars, 3)
 	}
-	if session.Session.Rsrq < -15 {
+	if session.Rsrq < -15 {
 		bars = u32min(bars, 2)
 	}
-	if session.Session.Rsrq < -20 {
+	if session.Rsrq < -20 {
 		bars = u32min(bars, 1)
 	}
 
@@ -1018,9 +1263,9 @@ func WireBarsFromSession(session *HubSession) (rat string, bars uint32) {
 }
 
 // WireExtractSessionContext extracts session context from the wire message
-func WireExtractSessionContext(wire []byte, session *HubSession) (suppressResponse bool, err error) {
+func WireExtractSessionContext(ctx context.Context, wire []byte, session *HubSession) (suppressResponse bool, err error) {
 	var req notehubMessage
-	req, _, err = msgFromWire(wire)
+	req, _, err = msgFromWire(ctx, wire)
 	if err != nil {
 		return
 	}
@@ -1067,9 +1312,16 @@ func WireExtractSessionContext(wire []byte, session *HubSession) (suppressRespon
 	if req.Temp1000 != 0 {
 		session.Session.Temp = float64(req.Temp1000) / 1000
 	}
+	session.Session.PowerCharging = (req.PowerSource & NotecardPowerCharging) != 0
+	session.Session.PowerUsb = (req.PowerSource & NotecardPowerUsb) != 0
+	session.Session.PowerPrimary = (req.PowerSource & NotecardPowerPrimary) != 0
+	session.Session.PowerMahUsed = req.PowerMahUsed
+	session.Session.PenaltySecs = req.PenaltySecs
+	session.Session.FailedConnects = req.FailedConnects
+	session.Session.SocketAlias = req.SocketAlias
 	session.Session.Moved = req.MotionSecs
 	session.Session.Orientation = req.MotionOrientation
-	session.Session.Trigger = req.SessionTrigger
+	session.Session.WhySessionOpened = req.SessionTrigger
 	session.Notification = req.NotificationSession
 	session.Session.ContinuousSession = req.ContinuousSession
 	if req.MessageType == msgDiscover {
@@ -1155,25 +1407,77 @@ func WireExtractSessionContext(wire []byte, session *HubSession) (suppressRespon
 		session.Session.Iccid = str1
 		session.Session.Apn = str2
 	}
+
+	// Assign the base transport type
+	session.Session.Transport = rat
+	switch session.Session.Transport {
+	case "soft":
+		session.Session.Transport = "simulator"
+	case "gsm":
+		session.Session.Transport = "cell:gsm"
+	case "nbiot":
+		session.Session.Transport = "cell:nbiot"
+	case "cdma":
+		session.Session.Transport = "cell:cdma"
+	case "umts":
+		session.Session.Transport = "cell:umts"
+	case "emtc", "CAT-M1":
+		session.Session.Transport = "cell:emtc"
+	case "lte":
+		session.Session.Transport = "cell:lte"
+	}
+
+	// Fix up bearer for old notecards that accidentally zero'ed out
+	// the bearer field rather than setting it to UNKNOWN (-1)
+	if bearer == notecard.NetworkBearerGsm && rat != "gsm" {
+		bearer = notecard.NetworkBearerUnknown
+	}
+
+	// Other cleanups based on bearer
 	switch bearer {
 	case notecard.NetworkBearerGsm:
 		session.Session.Bearer = "GSM"
+		if rat != "gsm" {
+			session.Session.Transport += ":gsm"
+		}
 	case notecard.NetworkBearerTdScdma:
 		session.Session.Bearer = "TD-SCDMA"
+		session.Session.Transport += ":td-scdma"
 	case notecard.NetworkBearerWcdma:
 		session.Session.Bearer = "WCDMA"
+		session.Session.Transport += ":wcdma"
 	case notecard.NetworkBearerCdma2000:
 		session.Session.Bearer = "CDMA2000"
+		session.Session.Transport += ":cdma2000"
 	case notecard.NetworkBearerWiMax:
 		session.Session.Bearer = "WIMAX"
+		session.Session.Transport += ":wimax"
 	case notecard.NetworkBearerLteTdd:
 		session.Session.Bearer = "LTE TDD"
+		if rat == "lte" {
+			session.Session.Transport += ":tdd"
+		} else {
+			session.Session.Transport += ":lte-tdd"
+		}
 	case notecard.NetworkBearerLteFdd:
 		session.Session.Bearer = "LTE FDD"
+		if rat == "lte" {
+			session.Session.Transport += ":fdd"
+		} else {
+			session.Session.Transport += ":lte-fdd"
+		}
 	case notecard.NetworkBearerNBIot:
 		session.Session.Bearer = "NB-IoT"
+		if rat != "nbiot" {
+			session.Session.Transport += ":nbiot"
+		}
 	case notecard.NetworkBearerWLan:
 		session.Session.Bearer = "WiFi"
+		if rat == "wifi-2.4" {
+			session.Session.Transport = "wifi"
+		} else if session.Session.Transport != "wifi" {
+			session.Session.Transport += ":wifi"
+		}
 	case notecard.NetworkBearerBluetooth:
 		session.Session.Bearer = "Bluetooth"
 	case notecard.NetworkBearerIeee802p15p4:
@@ -1200,57 +1504,161 @@ func WireExtractSessionContext(wire []byte, session *HubSession) (suppressRespon
 }
 
 // msgFromWire converts a request from wire format
-func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
+func msgFromWire(ctx context.Context, wire []byte) (msg notehubMessage, wirelen int, err error) {
+	return msgFromWireTrace(ctx, wire, false)
+}
+
+// msgFromWire with optional verbose debugging output
+func msgFromWireTrace(ctx context.Context, wire []byte, trace bool) (msg notehubMessage, wirelen int, err error) {
+
+	if trace {
+		fmt.Printf("\n--- ENTERING msgFromWire ---\n")
+		fmt.Printf("Wire buffer length: %d bytes\n", len(wire))
+		fmt.Printf("First 32 bytes (or less): % x\n", wire[:min(len(wire), 32)])
+	}
+
 	msg = notehubMessage{}
 
 	// Process the header
 	wirebuflen := len(wire)
 	if wirebuflen < 1 {
 		err = fmt.Errorf("wire: can't read version")
+		if trace {
+			fmt.Printf("ERROR: Buffer too short to read version byte\n")
+		}
 		return
 	}
 	wirever := wire[0]
-	isValid, hdrlen := wireProcessVersionByte(wirever)
+	if trace {
+		fmt.Printf("\nVersion byte: 0x%02x (%d)\n", wirever, wirever)
+	}
+
+	isValid, hdrlen := wireProcessVersionByteTrace(wirever, trace)
+	if trace {
+		fmt.Printf("wireProcessVersionByte returned: isValid=%v, hdrlen=%d\n", isValid, hdrlen)
+	}
+
 	if !isValid {
 		err = fmt.Errorf("wire: invalid version")
+		if trace {
+			fmt.Printf("ERROR: Invalid version byte\n")
+		}
 		return
 	}
 	if wirebuflen < (1 + hdrlen) {
 		err = fmt.Errorf("wire: can't read header")
-		return
-	}
-	protobufLength, binaryLength, err := wireReadHeader(wirever, wire[1:1+hdrlen])
-	if err != nil {
+		if trace {
+			fmt.Printf("ERROR: Buffer too short for header. Need %d bytes, have %d\n", 1+hdrlen, wirebuflen)
+		}
 		return
 	}
 
+	if trace {
+		fmt.Printf("\nReading header of %d bytes starting at offset 1\n", hdrlen)
+		if hdrlen > 0 {
+			fmt.Printf("Header bytes: % x\n", wire[1:1+hdrlen])
+		}
+	}
+
+	protobufLength, binaryLength, err := wireReadHeaderTrace(wirever, wire[1:1+hdrlen], trace)
+	if err != nil {
+		if trace {
+			fmt.Printf("ERROR from wireReadHeader: %v\n", err)
+		}
+		return
+	}
+
+	if trace {
+		fmt.Printf("wireReadHeader returned: protobufLength=%d, binaryLength=%d\n", protobufLength, binaryLength)
+	}
+
 	// Verify that there's enough to read all the data
-	if wirebuflen < (1 + hdrlen + int(protobufLength+binaryLength)) {
+	totalNeeded := 1 + hdrlen + int(protobufLength+binaryLength)
+	if trace {
+		fmt.Printf("\nTotal bytes needed: %d (1 ver + %d hdr + %d pb + %d bin)\n",
+			totalNeeded, hdrlen, protobufLength, binaryLength)
+		fmt.Printf("Bytes available: %d\n", wirebuflen)
+	}
+
+	if wirebuflen < totalNeeded {
 		err = fmt.Errorf("wire: message is too short")
+		if trace {
+			fmt.Printf("ERROR: Not enough bytes in buffer\n")
+		}
 		return
 	}
 
 	// Parse the protocol buffer
 	pb := NotehubPB{}
 	wirebase := 1 + hdrlen
-	err = proto.Unmarshal(wire[wirebase:wirebase+int(protobufLength)], &pb)
-	if err != nil {
-		err = fmt.Errorf("wire: cannot unmarshal PB: %s", err)
-		return
+	if trace {
+		fmt.Printf("\nUnmarshaling protobuf from offset %d, length %d\n", wirebase, protobufLength)
+	}
+
+	if protobufLength > 0 {
+		pbBytes := wire[wirebase : wirebase+int(protobufLength)]
+		if trace {
+			fmt.Printf("Protobuf bytes: % x\n", pbBytes[:min(len(pbBytes), 64)])
+		}
+
+		err = proto.Unmarshal(pbBytes, &pb)
+		if err != nil {
+			err = fmt.Errorf("wire: cannot unmarshal PB: %s", err)
+			if trace {
+				fmt.Printf("ERROR unmarshaling protobuf: %v\n", err)
+			}
+			return
+		}
+		if trace {
+			fmt.Printf("Successfully unmarshaled protobuf\n")
+		}
 	}
 	wirebase += int(protobufLength)
 
 	// Extract the PB
+	if trace {
+		fmt.Printf("\n--- Extracting protobuf fields ---\n")
+	}
 	msg.Version = uint32(pb.GetVersion())
+	if trace {
+		fmt.Printf("Version: %d\n", msg.Version)
+	}
 	msg.MessageType = pb.GetMessageType()
+	if trace {
+		fmt.Printf("MessageType: %s\n", msg.MessageType)
+	}
 	msg.Error = pb.GetError()
+	if trace {
+		fmt.Printf("Error: %s\n", msg.Error)
+	}
 	msg.DeviceUID = pb.GetDeviceUID()
+	if trace {
+		fmt.Printf("DeviceUID: %s\n", msg.DeviceUID)
+	}
 	msg.DeviceSN = pb.GetDeviceSN()
+	if trace {
+		fmt.Printf("DeviceSN: %s\n", msg.DeviceSN)
+	}
 	msg.DeviceSKU = pb.GetDeviceSKU()
+	if trace {
+		fmt.Printf("DeviceSKU: %s\n", msg.DeviceSKU)
+	}
 	msg.DeviceOrderingCode = pb.GetDeviceOrderingCode()
+	if trace {
+		fmt.Printf("DeviceOrderingCode: %s\n", msg.DeviceOrderingCode)
+	}
 	msg.DeviceFirmware = pb.GetDeviceFirmware()
+	if trace {
+		fmt.Printf("DeviceFirmware: %d\n", msg.DeviceFirmware)
+	}
 	msg.DevicePIN = pb.GetDevicePIN()
+	if trace {
+		fmt.Printf("DevicePIN: %s\n", msg.DevicePIN)
+	}
 	msg.ProductUID = pb.GetProductUID()
+	if trace {
+		fmt.Printf("ProductUID: %s\n", msg.ProductUID)
+	}
 	msg.DeviceEndpointID = pb.GetDeviceEndpointID()
 	msg.HubTimeNs = pb.GetHubTimeNs()
 	msg.HubEndpointID = pb.GetHubEndpointID()
@@ -1277,6 +1685,11 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	msg.Temp100 = pb.GetTemp100()
 	msg.Voltage1000 = pb.GetVoltage1000()
 	msg.Temp1000 = pb.GetTemp1000()
+	msg.PowerSource = pb.GetPowerSource()
+	msg.PowerMahUsed = pb.GetPowerMahUsed()
+	msg.PenaltySecs = pb.GetPenaltySecs()
+	msg.FailedConnects = pb.GetFailedConnects()
+	msg.SocketAlias = pb.GetSocketAlias()
 	msg.UsageProvisioned = pb.GetUsageProvisioned()
 	msg.UsageRcvdBytes = pb.GetUsageRcvdBytes()
 	msg.UsageSentBytes = pb.GetUsageSentBytes()
@@ -1299,8 +1712,19 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 
 	// Validate the PB
 	binaryLengthExpected := pb.GetBytes1() + pb.GetBytes2() + pb.GetBytes3() + pb.GetBytes4()
+	if trace {
+		fmt.Printf("\n--- Binary data validation ---\n")
+		fmt.Printf("Bytes1: %d, Bytes2: %d, Bytes3: %d, Bytes4: %d\n",
+			pb.GetBytes1(), pb.GetBytes2(), pb.GetBytes3(), pb.GetBytes4())
+		fmt.Printf("Expected total binary length: %d\n", binaryLengthExpected)
+		fmt.Printf("Actual binary length: %d\n", binaryLength)
+	}
+
 	if binaryLength != binaryLengthExpected {
 		err = fmt.Errorf("wire: protobuf length actual %d != expected %d", binaryLength, binaryLengthExpected)
+		if trace {
+			fmt.Printf("ERROR: Binary length mismatch\n")
+		}
 		return
 	}
 
@@ -1310,60 +1734,205 @@ func msgFromWire(wire []byte) (msg notehubMessage, wirelen int, err error) {
 	}
 	bytesLen := int(pb.GetBytes1())
 	if bytesLen != 0 {
+		if trace {
+			fmt.Printf("\n--- Processing Bytes1 (Notefile) ---\n")
+			fmt.Printf("Reading %d bytes from offset %d\n", bytesLen, wirebase)
+		}
+		compressedData := wire[wirebase : wirebase+bytesLen]
+		if trace {
+			fmt.Printf("First 32 bytes of compressed data: % x\n", compressedData[:min(len(compressedData), 32)])
+		}
+
 		msg.nf.Notefile = &Notefile{}
-		jdata, err2 := jsonDecompress(wire[wirebase : wirebase+bytesLen])
+		jdata, err2 := jsonDecompressTrace(compressedData, trace)
 		if err2 != nil {
 			err = err2
+			if trace {
+				fmt.Printf("ERROR in jsonDecompress: %v\n", err)
+			}
 			return
 		}
+		if trace {
+			fmt.Printf("Decompressed to %d bytes\n", len(jdata))
+			fmt.Printf("Decompressed JSON: %s\n", string(jdata[:min(len(jdata), 200)]))
+		}
+
 		err = note.JSONUnmarshal(jdata, msg.nf.Notefile)
 		if err != nil {
-			return
+
+			// Attempt to fix corrupt JSON because that's far preferable to aborting the transaction,
+			// which could cause sync to stall forever
+			if !fixCorruptJson {
+				if trace {
+					fmt.Printf("ERROR unmarshaling JSON: %v\n", err)
+				}
+				return
+			}
+			if trace {
+				fmt.Printf("Fixing corrupt JSON in notefile: %s\n", err)
+			}
+			fixedJson, err2 := FixCorruptJSON(string(jdata))
+			if err2 != nil {
+				if trace {
+					fmt.Printf("ERROR fixing corrupted JSON: %v\n", err2)
+				}
+				return
+			}
+			err2 = note.JSONUnmarshal([]byte(fixedJson), msg.nf.Notefile)
+			if err2 != nil {
+				if trace {
+					fmt.Printf("ERROR unmarshaling fixed JSON: %v\n", err2)
+				}
+				return
+			}
+			logWarn(ctx, "msgFromWire: fixed corrupt JSON in notefile: %s", err)
+			err = nil
 		}
+
 		wirebase += bytesLen
 	}
 	bytesLen = int(pb.GetBytes2())
 	if bytesLen != 0 {
+		if trace {
+			fmt.Printf("\n--- Processing Bytes2 (Notefiles) ---\n")
+			fmt.Printf("Reading %d bytes from offset %d\n", bytesLen, wirebase)
+		}
+		compressedData := wire[wirebase : wirebase+bytesLen]
+		if trace {
+			fmt.Printf("First 32 bytes of compressed data: % x\n", compressedData[:min(len(compressedData), 32)])
+		}
+
 		msg.nf.Notefiles = &map[string]*Notefile{}
-		jdata, err2 := jsonDecompress(wire[wirebase : wirebase+bytesLen])
+		jdata, err2 := jsonDecompressTrace(compressedData, trace)
 		if err2 != nil {
 			err = err2
+			if trace {
+				fmt.Printf("ERROR in jsonDecompress: %v\n", err)
+			}
 			return
 		}
+		if trace {
+			fmt.Printf("Decompressed to %d bytes\n", len(jdata))
+		}
+
 		err = note.JSONUnmarshal(jdata, msg.nf.Notefiles)
 		if err != nil {
-			return
+
+			// Attempt to fix corrupt JSON because that's far preferable to aborting the transaction,
+			// which could cause sync to stall forever
+			if !fixCorruptJson {
+				if trace {
+					fmt.Printf("ERROR unmarshaling JSON: %v\n", err)
+				}
+				return
+			}
+			if trace {
+				fmt.Printf("Fixing corrupt JSON in notefiles: %s\n", err)
+			}
+			fixedJson, err2 := FixCorruptJSON(string(jdata))
+			if err2 != nil {
+				if trace {
+					fmt.Printf("ERROR fixing corrupted JSON: %v\n", err2)
+				}
+				return
+			}
+			err2 = note.JSONUnmarshal([]byte(fixedJson), msg.nf.Notefiles)
+			if err2 != nil {
+				if trace {
+					fmt.Printf("ERROR unmarshaling fixed JSON: %v\n", err2)
+				}
+				return
+			}
+			logWarn(ctx, "msgFromWire: fixed corrupt JSON in notefiles: %s", err)
+			err = nil
 		}
+
 		wirebase += bytesLen
 	}
 	bytesLen = int(pb.GetBytes3())
 	if bytesLen != 0 {
+		if trace {
+			fmt.Printf("\n--- Processing Bytes3 (Body) ---\n")
+			fmt.Printf("Reading %d bytes from offset %d\n", bytesLen, wirebase)
+		}
+		compressedData := wire[wirebase : wirebase+bytesLen]
+		if trace {
+			fmt.Printf("First 32 bytes of compressed data: % x\n", compressedData[:min(len(compressedData), 32)])
+		}
+
 		msg.nf.Body = &map[string]interface{}{}
-		jdata, err2 := jsonDecompress(wire[wirebase : wirebase+bytesLen])
+		jdata, err2 := jsonDecompressTrace(compressedData, trace)
 		if err2 != nil {
 			err = err2
+			if trace {
+				fmt.Printf("ERROR in jsonDecompress: %v\n", err)
+			}
 			return
 		}
+		if trace {
+			fmt.Printf("Decompressed to %d bytes\n", len(jdata))
+			fmt.Printf("Decompressed JSON: %s\n", string(jdata[:min(len(jdata), 200)]))
+		}
+
 		err = note.JSONUnmarshal(jdata, msg.nf.Body)
 		if err != nil {
-			return
+
+			// Attempt to fix corrupt JSON because that's far preferable to aborting the transaction,
+			// which could cause sync to stall forever
+			if !fixCorruptJson {
+				if trace {
+					fmt.Printf("ERROR unmarshaling JSON: %v\n", err)
+				}
+				return
+			}
+			if trace {
+				fmt.Printf("Fixing corrupt JSON in body: %s\n", err)
+			}
+			fixedJson, err2 := FixCorruptJSON(string(jdata))
+			if err2 != nil {
+				if trace {
+					fmt.Printf("ERROR fixing corrupted JSON: %v\n", err2)
+				}
+				return
+			}
+			err2 = note.JSONUnmarshal([]byte(fixedJson), msg.nf.Body)
+			if err2 != nil {
+				if trace {
+					fmt.Printf("ERROR unmarshaling fixed JSON: %v\n", err2)
+				}
+				return
+			}
+			logWarn(ctx, "msgFromWire: fixed corrupt JSON in body: %s", err)
+			err = nil
 		}
+
 		wirebase += bytesLen
 	}
 	bytesLen = int(pb.GetBytes4())
 	if bytesLen != 0 {
+		if trace {
+			fmt.Printf("\n--- Processing Bytes4 (Payload) ---\n")
+			fmt.Printf("Reading %d bytes from offset %d\n", bytesLen, wirebase)
+		}
 		payload := wire[wirebase : wirebase+bytesLen]
+		if trace {
+			fmt.Printf("Payload bytes: % x\n", payload[:min(len(payload), 32)])
+		}
 		msg.nf.Payload = &payload
 		wirebase += bytesLen
 	}
 
 	// Done
 	wirelen = wirebase
+	if trace {
+		fmt.Printf("\n--- msgFromWire complete ---\n")
+		fmt.Printf("Total bytes consumed: %d\n", wirelen)
+	}
 	return
 }
 
 // WireReadRequest reads a message from the specified reader
-func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, request []byte, err error) {
+func WireReadRequest(ctx context.Context, conn net.Conn, waitIndefinitely bool) (bytesRead uint32, request []byte, err error) {
 	var n int
 	var version []byte
 
@@ -1376,13 +1945,16 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		var err2 error
 		versionLen := 1
 		version = make([]byte, versionLen)
-		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
-		n, err2 = rdconn.Read(version)
-		if debugWireRead {
-			if err2 == nil {
-				logDebug(context.Background(), "\n\nrdVersion(%d) %d", len(version), n)
-			}
+		if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+			logError(ctx, "SetReadDeadline: %v", err)
 		}
+
+		n, err2 = rdconn.Read(version)
+
+		if debugWireRead && err2 == nil {
+			logDebug(ctx, "\n\nrdVersion(%d) %d", len(version), n)
+		}
+
 		if err2, ok := err2.(net.Error); ok && err2.Timeout() {
 			if !waitIndefinitely {
 				err = fmt.Errorf("wire read: " + note.ErrTimeout + " timeout on read")
@@ -1406,7 +1978,7 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 		break
 	}
 
-	// Process the version byte to determine the length of th header that follows
+	// Process the version byte to determine the length of the header that follows
 	isValidVersion, headerLength := wireProcessVersionByte(version[0])
 	if !isValidVersion {
 		err = fmt.Errorf("wire read: unrecognized protocol")
@@ -1415,16 +1987,18 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 
 	// Read the header
 	header := make([]byte, headerLength)
-	_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+	if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+		logError(ctx, "SetReadDeadline: %v", err)
+	}
 	if debugWireRead {
-		logDebug(context.Background(), "rdHeader(%d)", len(header))
+		logDebug(ctx, "rdHeader(%d)", len(header))
 	}
 	n, err = io.ReadFull(rdconn, header)
 	if debugWireRead {
 		if err == nil {
-			logDebug(context.Background(), "rdHeader(%d) %d", len(header), n)
+			logDebug(ctx, "rdHeader(%d) %d", len(header), n)
 		} else {
-			logWarn(context.Background(), "rdHeader(%d) %d %s", len(header), n, err)
+			logWarn(ctx, "rdHeader(%d) %d %s", len(header), n, err)
 		}
 	}
 	if err != nil {
@@ -1447,16 +2021,18 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 	var protobuf []byte
 	if protobufLength != 0 {
 		protobuf = make([]byte, protobufLength)
-		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+		if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+			logError(ctx, "SetReadDeadline: %v", err)
+		}
 		if debugWireRead {
-			logDebug(context.Background(), "rdProtobuf(%d)", len(protobuf))
+			logDebug(ctx, "rdProtobuf(%d)", len(protobuf))
 		}
 		n, err = io.ReadFull(rdconn, protobuf)
 		if debugWireRead {
 			if err == nil {
-				logDebug(context.Background(), "rdProtobuf(%d) %d", len(protobuf), n)
+				logDebug(ctx, "rdProtobuf(%d) %d", len(protobuf), n)
 			} else {
-				logWarn(context.Background(), "rdProtobuf(%d) %d %s", len(protobuf), n, err)
+				logWarn(ctx, "rdProtobuf(%d) %d %s", len(protobuf), n, err)
 			}
 		}
 		if err != nil {
@@ -1481,16 +2057,18 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 	var binary []byte
 	if binaryLength != 0 {
 		binary = make([]byte, binaryLength)
-		_ = conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+		if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+			logError(ctx, "SetReadDeadline: %v", err)
+		}
 		if debugWireRead {
-			logDebug(context.Background(), "rdBinary(%d)", len(binary))
+			logDebug(ctx, "rdBinary(%d)", len(binary))
 		}
 		n, err = io.ReadFull(rdconn, binary)
 		if debugWireRead {
 			if err == nil {
-				logDebug(context.Background(), "rdBinary(%d) %d", len(binary), n)
+				logDebug(ctx, "rdBinary(%d) %d", len(binary), n)
 			} else {
-				logWarn(context.Background(), "rdBinary(%d) %d %s", len(binary), n, err)
+				logWarn(ctx, "rdBinary(%d) %d %s", len(binary), n, err)
 			}
 		}
 		if err != nil {
@@ -1515,11 +2093,43 @@ func WireReadRequest(conn net.Conn, waitIndefinitely bool) (bytesRead uint32, re
 	return
 }
 
-// PacketMaxData returns the largest amount of data allowed
-func (h *PacketHandler) PacketMaxData(encrypted bool) (length int) {
+// PacketMaxDownlinkData returns the largest amount of data allowed
+func (h *PacketHandler) PacketMaxDownlinkData(encrypted bool) (length int) {
 
 	// Compute the length available
-	length = int(h.Notecard.PacketMtu)
+	length = int(h.Notecard.PacketDownlinkMtu)
+
+	// Packet flag byte
+	length -= 1
+
+	// ConnectionID
+	if h.Notecard.PacketCidType != CidNone {
+		length -= len(h.Notehub.Cid)
+	}
+
+	// If encrypted
+	if encrypted {
+		length -= 1 // MessagePort
+		length -= ChaCha20Poly1305IvLen
+		length -= ChaCha20Poly1305AuthTagLen
+	} else {
+		length -= 1 // MessagePort
+	}
+
+	// Done
+	return length
+
+}
+
+// PacketMaxUplinkData returns the largest amount of data allowed
+func (h *PacketHandler) PacketMaxUplinkData(encrypted bool) (length int) {
+
+	// Compute the length available
+	length = int(h.Notecard.PacketUplinkMtu)
+	if length == 0 {
+		// If uplink MTU is not set, the downlink MTU is interpreted as being bidirectional
+		length = int(h.Notecard.PacketDownlinkMtu)
+	}
 
 	// Packet flag byte
 	length -= 1
@@ -1557,8 +2167,8 @@ func (h *PacketHandler) PacketToWire(payload Packet, secureData bool, downlinksP
 	}
 
 	// Bail if too much data
-	if len(payload.Data) > h.PacketMaxData(encrypted) {
-		err = fmt.Errorf("data length %d is greater than max allowed %d", len(payload.Data), h.PacketMaxData(encrypted))
+	if len(payload.Data) > h.PacketMaxDownlinkData(encrypted) {
+		err = fmt.Errorf("data length %d is greater than max allowed %d", len(payload.Data), h.PacketMaxDownlinkData(encrypted))
 		return
 	}
 
@@ -1745,7 +2355,7 @@ func (h *PacketHandler) PacketFromWire(wire []byte) (msg Packet, err error) {
 	}
 
 	// Final validation
-	if len(msg.Data) > h.PacketMaxData((packetFlags&PacketFlagEncrypted) != 0) {
+	if len(msg.Data) > h.PacketMaxUplinkData((packetFlags&PacketFlagEncrypted) != 0) {
 		err = fmt.Errorf("packet received data too large (%d)", left)
 		return
 	}
