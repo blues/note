@@ -14,7 +14,6 @@ import (
 	"github.com/blues/note-go/note"
 	notelib "github.com/blues/note/lib"
 	golc "github.com/google/open-location-code/go"
-	"github.com/google/uuid"
 )
 
 // Event log directory
@@ -23,17 +22,16 @@ var eventLogDirectory string
 // Initialize the event log
 func eventLogInit(dir string) {
 	eventLogDirectory = dir
-	os.MkdirAll(eventLogDirectory, 0o777)
+	_ = os.MkdirAll(eventLogDirectory, 0o777)
 }
 
 // Event handling procedure
-func notehubEvent(ctx context.Context, session *notelib.HubSession, local bool, file *notelib.Notefile, event *note.Event) (err error) {
+func notehubEvent(ctx context.Context, session *notelib.HubSession, local bool, event *note.Event) (err error) {
 	// Retrieve the session context
 
 	// If this is a queue and this is a template note, recursively expand it to multiple notifications
 	if event.Bulk {
-		eventBulk(session, local, file, *event)
-		return
+		return eventBulk(session, local, *event)
 	}
 
 	// Don't record events for environment variable updates
@@ -69,7 +67,7 @@ func notehubEvent(ctx context.Context, session *notelib.HubSession, local bool, 
 }
 
 // For bulk data, process the template and payload, generating recursive notifications
-func eventBulk(session *notelib.HubSession, local bool, file *notelib.Notefile, event note.Event) (err error) {
+func eventBulk(session *notelib.HubSession, local bool, event note.Event) (err error) {
 	// Get the template from the note
 	bodyJSON, err := note.JSONMarshal(event.Body)
 	if err != nil {
@@ -107,11 +105,11 @@ func eventBulk(session *notelib.HubSession, local bool, file *notelib.Notefile, 
 		nn.Bulk = false
 		nn.Body = &body
 		nn.Payload = payload
-		nn.EventUID = uuid.New().String()
-		notehubEvent(context.Background(), session, local, file, &nn)
+		nn.EventUID = notelib.GenerateEventUid(&nn)
+		_ = notehubEvent(context.Background(), session, local, &nn)
 
 	}
 
 	// Done
-	return nil
+	return
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/blues/note-go/note"
 	"github.com/blues/note-go/notecard"
@@ -124,7 +125,7 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			}
 		}
 		// Check the noteID
-		isQueue, toHub, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
+		isQueue, toHub, fromHub, _, _, _ := NotefileAttributesFromID(req.NotefileID)
 		if req.NoteID == "" {
 			if !isQueue {
 				rsp.Err = "note ID is required when using a database notefile"
@@ -134,6 +135,24 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			if isQueue {
 				rsp.Err = "note ID should not be specified when using a queue notefile"
 				break
+			}
+		}
+		// If this is an inbound queue, and if the user has not already specified an
+		// explicit 'when' time to be assigned to the note, make sure that we assign
+		// the new note a creation time that is either now or later than the creation
+		// time assigned to any note still pending to be downloaded in the queue.
+		// This is to ensure that a note.get on the notecard will receive the notes
+		// in FIFO order, even at the cost of having a burst of notes being created
+		// in the future.  It's a tradeoff, but because of the importance of FIFO
+		// behavior, FIFO wins over time-correctness.
+		if isQueue && fromHub && req.Time == 0 {
+			openfile, file, err := box.OpenNotefile(ctx, req.NotefileID)
+			if err == nil {
+				_, mostRecentWhen, err := file.GetMostRecentNoteID()
+				if err == nil && mostRecentWhen >= time.Now().UTC().Unix() {
+					req.Time = mostRecentWhen + 1
+				}
+				openfile.Close(ctx)
 			}
 		}
 		// Add the note
@@ -259,9 +278,9 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 			rsp.Err = "no notefile specified"
 			break
 		}
-		isQueue, toHub, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
+		isQueue, _, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
 		if req.NoteID == "" {
-			if !isQueue || !toHub {
+			if !isQueue {
 				rsp.Err = "no note ID specified"
 				break
 			}
@@ -279,8 +298,10 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 				break
 			}
 		}
-		// Handle queues by getting the LRU note
-		if isQueue && toHub && req.NoteID == "" {
+		// Handle queues by getting the LRU note.  Note that we allow either inbound
+		// or outbound queues to be accessed this way via API, explicitly to allow
+		// the API to be used to manage queues in either direction.
+		if isQueue && req.NoteID == "" {
 			openfile, file, err2 := box.OpenNotefile(ctx, req.NotefileID)
 			if err2 != nil {
 				rsp.Err = fmt.Sprintf("%s", err2)
@@ -352,6 +373,14 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 		}
 		if req.Pending {
 			req.TrackerID = "^"
+		}
+
+		// Special way, for use by support, to get a list of all notefiles
+		// and their info such as templates.
+		if req.Full {
+			allNotefiles := box.NoteboxNotefileDesc()
+			rsp.FileDesc = &allNotefiles
+			break
 		}
 
 		// If no tracker, generate the entire list of notefiles
@@ -577,13 +606,14 @@ func (box *Notebox) Request(ctx context.Context, endpointID string, reqJSON []by
 				payload := xnote.GetPayload()
 				info.Payload = &payload
 			}
+			info.When = xnote.When()
 
 			// Add it to the list to be returned
 			infolist[noteIDs[i]] = info
 
 			// Delete it as a side-effect, if desired
 			if req.Delete {
-				_ = file.DeleteNote(endpointID, noteIDs[i])
+				_ = file.DeleteNote(ctx, endpointID, noteIDs[i])
 			}
 
 		}

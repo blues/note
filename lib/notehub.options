@@ -23,6 +23,7 @@ notelib.NotehubPB.DeviceSKU max_size:100
 notelib.NotehubPB.DeviceOrderingCode max_size:254
 notelib.NotehubPB.DevicePIN max_size:254
 notelib.NotehubPB.Where max_size:25
+notelib.NotehubPB.SocketAlias max_size:100
 
 
 

@@ -13,7 +13,7 @@ import (
 )
 
 // NotehubDiscover is responsible for discovery of information about the services and apps
-func NotehubDiscover(deviceUID string, deviceSN string, productUID string, hostname string, packetHandlerVersion string) (info notelib.DiscoverInfo, err error) {
+func NotehubDiscover(deviceUID string, deviceSN string, productUID string, appUID string, needHandlerInfo bool, hostname string, packetHandlerVersion string) (info notelib.DiscoverInfo, err error) {
 	// Return basic info about the server
 	info.HubEndpointID = note.DefaultHubEndpointID
 	info.HubTimeNs = time.Now().UnixNano()
@@ -25,11 +25,13 @@ func NotehubDiscover(deviceUID string, deviceSN string, productUID string, hostn
 			err = err2
 			return
 		}
-		info.HubSessionHandler = device.Handler
-		info.HubSessionTicket = device.Ticket
-		info.HubSessionTicketExpiresTimeNs = device.TicketExpiresTimeSec * int64(1000000000)
 		info.HubDeviceStorageObject = notelib.FileStorageObject(deviceUID)
 		info.HubDeviceAppUID = device.AppUID
+		if needHandlerInfo {
+			info.HubSessionHandler = device.Handler
+			info.HubSessionTicket = device.Ticket
+			info.HubSessionTicketExpiresTimeNs = device.TicketExpiresTimeSec * int64(1000000000)
+		}
 	}
 
 	// Return the tcps issuer rootca cert, used for device-side certificate rotation

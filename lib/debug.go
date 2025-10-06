@@ -12,12 +12,14 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Debugging details
 var (
 	synchronous     = true
-	debugEvent      = true
+	DebugEvent      = true
 	debugBox        = false
 	debugSync       = false
 	debugSyncMax    = false
@@ -31,12 +33,19 @@ var (
 )
 
 var vars = [...]*bool{
-	&debugEvent, &debugBox, &debugSync, &debugSyncMax, &debugCompress, &debugHubRequest, &debugRequest, &debugFile,
+	&DebugEvent, &debugBox, &debugSync, &debugSyncMax, &debugCompress, &debugHubRequest, &debugRequest, &debugFile,
 }
 
 var debugEnvInitialized = false
+var debugEnvInitMutex sync.Mutex
 
 func debugEnvInit() {
+	// Only one goroutine in initialization at a time
+	if debugEnvInitialized {
+		return
+	}
+	debugEnvInitMutex.Lock()
+	defer debugEnvInitMutex.Unlock()
 	if debugEnvInitialized {
 		return
 	}
@@ -140,23 +149,47 @@ func logError(ctx context.Context, format string, args ...interface{}) {
 	}
 }
 
+var timerBeginFunc LogTimerBeginFunc
+
+func timerBegin(ctx context.Context, key string) string {
+	if timerBeginFunc != nil {
+		return timerBeginFunc(ctx, key)
+	}
+	return ""
+}
+
+var timerEndFunc LogTimerEndFunc
+
+func timerEnd(ctx context.Context, key string) {
+	if timerEndFunc != nil {
+		timerEndFunc(ctx, key)
+	}
+}
+
 type LogFunc func(ctx context.Context, msg string, v ...interface{})
+type LogTimerBeginFunc func(ctx context.Context, key string) string
+type LogTimerEndFunc func(ctx context.Context, key string)
 
 func InitLogging(
 	debugFunc LogFunc,
 	infoFunc LogFunc,
 	warnFunc LogFunc,
-	errorFunc LogFunc) {
+	errorFunc LogFunc,
+	timerBeginFn LogTimerBeginFunc,
+	timerEndFn LogTimerEndFunc) {
 	debugEnvInit()
 	debugLoggerFunc = debugFunc
 	infoLoggerFunc = infoFunc
 	warnLoggerFunc = warnFunc
 	errorLoggerFunc = errorFunc
+	timerBeginFunc = timerBeginFn
+	timerEndFunc = timerEndFn
 }
 
 // Default logger for notelib
 var (
 	loggerInitialized bool
+	loggerInitMutex   sync.Mutex
 	loggerChannel     chan string
 )
 
@@ -185,6 +218,9 @@ func defaultLogger(ctx context.Context, format string, args ...interface{}) {
 
 // Initialize for debugging
 func defaultLoggerInit() {
+	loggerInitMutex.Lock()
+	defer loggerInitMutex.Unlock()
+
 	// The first time through, start our handler
 	if loggerInitialized {
 		return
@@ -206,4 +242,35 @@ func loggerHandler() {
 		fmt.Println(output)
 		runtime.Gosched()
 	}
+}
+
+// Default timewarn period used for suppressing LogInfo entirely
+const LogPeriodSuppressSecs = 2
+
+// PeriodicInfo is a struct that enables information to be displayed only periodically,
+// for 'sampled' tracing purposes, rather than on a continuous basis
+type LogPeriod struct {
+	LastLog    time.Time
+	PeriodSecs int
+}
+
+// LogInfoPeriodReset ensures that the very next period log does a trace
+func LogInfoPeriodReset(period *LogPeriod) {
+	period.LastLog = time.Time{}
+}
+
+// LogInfoPeriodically writes an unstructured log message with the INFO level but only periodically
+func LogInfoPeriodically(ctx context.Context, period *LogPeriod, msg string, v ...interface{}) {
+	if !period.LastLog.IsZero() && time.Since(period.LastLog) < time.Duration(period.PeriodSecs)*time.Second {
+		return
+	}
+	logInfo(ctx, msg, v...)
+	period.LastLog = time.Now()
+}
+
+// LogInfoBumpTrace bumps a trace interval
+func LogInfoBumpTrace(prev *time.Time) (duration time.Duration) {
+	duration = time.Since(*prev)
+	*prev = time.Now()
+	return
 }
