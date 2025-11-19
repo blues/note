@@ -190,7 +190,7 @@ func testNotebox(ctx context.Context, testid string) bool {
 			if err != nil {
 				return false
 			}
-			err = box.AddNote(ctx, "", notefileID, fmt.Sprintf("note%d", i), n)
+			err = box.AddNote(ctx, nil, "", notefileID, fmt.Sprintf("note%d", i), n)
 			if err != nil {
 				fmt.Printf("boxAddNote: %s", err)
 				return false
@@ -204,7 +204,7 @@ func testNotebox(ctx context.Context, testid string) bool {
 		}
 
 		for i := 0; i < 100; i++ {
-			err := nf.DeleteNote(ctx, "", fmt.Sprintf("note%d", i))
+			err := nf.DeleteNote(ctx, nil, "", fmt.Sprintf("note%d", i))
 			if err != nil {
 				return false
 			}
@@ -212,7 +212,7 @@ func testNotebox(ctx context.Context, testid string) bool {
 			if err != nil {
 				return false
 			}
-			err = box.AddNote(ctx, "", notefileID, "", n)
+			err = box.AddNote(ctx, nil, "", notefileID, "", n)
 			if err != nil {
 				return false
 			}
@@ -250,13 +250,13 @@ func testNotefile(ctx context.Context, testid string) bool {
 		if err != nil {
 			return false
 		}
-		_, err = nf.AddNote(ctx, "", fmt.Sprintf("note%d", i), n)
+		_, err = nf.AddNote(ctx, nil, "", fmt.Sprintf("note%d", i), n)
 		if err != nil {
 			return false
 		}
 	}
 	for i := 0; i < 100; i++ {
-		err := nf.DeleteNote(ctx, "", fmt.Sprintf("note%d", i))
+		err := nf.DeleteNote(ctx, nil, "", fmt.Sprintf("note%d", i))
 		if err != nil {
 			return false
 		}
@@ -264,7 +264,7 @@ func testNotefile(ctx context.Context, testid string) bool {
 		if err != nil {
 			return false
 		}
-		_, err = nf.AddNote(ctx, "", "", n)
+		_, err = nf.AddNote(ctx, nil, "", "", n)
 		if err != nil {
 			return false
 		}

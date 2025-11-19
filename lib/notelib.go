@@ -7,7 +7,6 @@
 package notelib
 
 import (
-	"net/http"
 	"sync"
 	"time"
 
@@ -80,17 +79,6 @@ type NoteboxInstance struct {
 type Notebox struct {
 	// Map of the Notefiles, indexed by storage object
 	instance *NoteboxInstance
-	// Default parameters to be passed to notefiles being opened in notebox
-	defaultEventFn         EventFunc   // The function to call when notifying of a change
-	defaultEventSession    *HubSession // And a parameter TODO rename
-	defaultEventDeviceUID  string
-	defaultEventDeviceSN   string
-	defaultEventProductUID string
-	defaultEventAppUID     string
-	defaultEventTransport  string
-	// For HTTP access control
-	clientHTTPReq *http.Request
-	clientHTTPRsp http.ResponseWriter
 }
 
 // If it takes more than 20 seconds, we are at risk of hitting the 30-second
