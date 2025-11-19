@@ -239,24 +239,44 @@ func NameFromUUID(uid string) (name string) {
 	return note.WordsFromNumber(uint32Hash)
 }
 
-func InitDeviceSession(sess *note.DeviceSession, handlerAddr string, secure bool) time.Time {
+// SessionType enumerates the type of session
+type SessionType int
+
+const (
+	SessionTypeTCP SessionType = iota
+	SessionTypeTLS
+	SessionTypePacket
+	SessionTypeWebhook
+)
+
+func InitDeviceSession(sess *note.DeviceSession, handlerAddr string, sessType SessionType) time.Time {
 	now := time.Now()
 	sess.SessionUID = NewUUID()
 	sess.SessionBegan = now.UTC().Unix()
 	sess.Period().Since = sess.SessionBegan
-	sess.TLSSession = secure
 	sess.Handler = handlerAddr
-	if secure {
+	sess.TLSSession = false
+	switch sessType {
+	case SessionTypeTLS:
+		sess.TLSSession = true
 		sess.Period().TLSSessions++
-	} else {
+	case SessionTypeTCP:
 		sess.Period().TCPSessions++
+	case SessionTypePacket:
+		sess.Period().PacketSessions++
+	case SessionTypeWebhook:
+		sess.Period().WebhookSessions++
 	}
 	return now
 }
 
 func NewHubSession(handlerAddr string, secure bool) HubSession {
 	deviceSession := note.DeviceSession{}
-	sessionBegan := InitDeviceSession(&deviceSession, handlerAddr, secure)
+	sessionType := SessionTypeTCP
+	if secure {
+		sessionType = SessionTypeTLS
+	}
+	sessionBegan := InitDeviceSession(&deviceSession, handlerAddr, sessionType)
 	return HubSession{
 		Session:      deviceSession,
 		SessionStart: sessionBegan,

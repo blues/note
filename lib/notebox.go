@@ -26,7 +26,6 @@ package notelib
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -97,7 +96,7 @@ func initNotebox(ctx context.Context, endpointID string, boxStorage string, stor
 	}
 	note, err := note.CreateNote(noteboxBodyToJSON(body), nil)
 	if err == nil {
-		_, err = boxfile.AddNote(ctx, endpointID, compositeNoteID(endpointID, endpointID), note)
+		_, err = boxfile.AddNote(ctx, nil, endpointID, compositeNoteID(endpointID, endpointID), note)
 	}
 	if err != nil {
 		return err
@@ -930,7 +929,7 @@ func (box *Notebox) SetNotefileInfo(ctx context.Context, notefileID string, note
 	_ = xnote.SetBody(noteboxBodyToJSON(body))
 
 	// Update the note
-	err = boxfile.UpdateNote(ctx, box.instance.endpointID, notefileID, xnote)
+	err = boxfile.UpdateNote(ctx, nil, box.instance.endpointID, notefileID, xnote)
 	if err != nil {
 		return fmt.Errorf(note.ErrNotefileNoExist+" cannot set info for notefile %s: %s", notefileID, err)
 	}
@@ -1151,14 +1150,6 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 			logDebug(ctx, "After openfile, %s open refcnt now %d", filestorage, atomic.LoadInt32(&openfile.openCount))
 		}
 
-		// Insert other info into needed for the Notifier.  We must do this when we
-		// reopen simply because the notefile could have been opened in the context of a
-		// session, but then the session may go away.  If an HTTP API such as note.add
-		// then comes in, the event will be referencing the now-defunct session and
-		// it will never get sent to the worker.  This forces the session to be
-		// refreshed every time we open the notefile, thus ensuring session freshness.
-		openfile.notefile.SetEventInfo(box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventProductUID, box.defaultEventAppUID, box.defaultEventTransport, box.defaultEventFn, box.defaultEventSession)
-
 		// Done
 		return openfile, openfile.notefile, nil
 
@@ -1195,12 +1186,6 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 		notefile.Queue = true
 	}
 
-	// Insert other info into needed for the Notifier.  Note that we cannot set the
-	// deviceUID or productUID on the client side because they are not always known
-	// at the time we do the open.  As such, client-side notifiers will need
-	// to function without these values.
-	notefile.SetEventInfo(box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventProductUID, box.defaultEventAppUID, box.defaultEventTransport, box.defaultEventFn, box.defaultEventSession)
-
 	// Copy the notefile info for all but box notefiles
 	if notefileID != box.instance.endpointID {
 		descBody := noteboxBodyFromJSON(desc.GetBody())
@@ -1230,28 +1215,6 @@ func (box *Notebox) OpenNotefile(ctx context.Context, notefileID string) (iOpenf
 
 	// Done
 	return openfile, notefile, nil
-}
-
-// SetClientInfo sets information that is necessary for HTTP client access checking
-func (box *Notebox) SetClientInfo(httpReq *http.Request, httpRsp http.ResponseWriter) {
-	box.clientHTTPReq = httpReq
-	box.clientHTTPRsp = httpRsp
-}
-
-// SetEventInfo establishes default information used for change notification on notefiles opened in the box
-func (box *Notebox) SetEventInfo(deviceUID string, deviceSN string, productUID string, appUID string, transport string, eventFn EventFunc, session *HubSession) {
-	box.defaultEventDeviceUID = deviceUID
-	box.defaultEventDeviceSN = deviceSN
-	box.defaultEventProductUID = productUID
-	box.defaultEventAppUID = appUID
-	box.defaultEventTransport = transport
-	box.defaultEventFn = eventFn
-	box.defaultEventSession = session
-}
-
-// GetEventInfo retrieves the info
-func (box *Notebox) GetEventInfo() (deviceUID string, deviceSN string, productUID string) {
-	return box.defaultEventDeviceUID, box.defaultEventDeviceSN, box.defaultEventAppUID
 }
 
 // CheckpointNotefile checkpoints an open Notefile to storage
@@ -1349,7 +1312,7 @@ func (box *Notebox) DeleteNotefile(ctx context.Context, notefileID string) (err 
 	boxfile.lock.RUnlock()
 	if !found {
 		box.Openfile().lock.Unlock()
-		_ = boxfile.DeleteNote(ctx, box.instance.endpointID, notefileID)
+		_ = boxfile.DeleteNote(ctx, nil, box.instance.endpointID, notefileID)
 		return nil
 	}
 
@@ -1385,7 +1348,7 @@ func (box *Notebox) DeleteNotefile(ctx context.Context, notefileID string) (err 
 
 		// Delete the note used for managing notefiles across all instances,
 		// ignoring errors because it may have been deleted by another instance
-		_ = boxfile.DeleteNote(ctx, box.instance.endpointID, notefileID)
+		_ = boxfile.DeleteNote(ctx, nil, box.instance.endpointID, notefileID)
 
 		// Delete the storage object
 		_ = storage.delete(ctx, box.instance.storage, notefileBody.Notefile.Storage)
@@ -1396,7 +1359,7 @@ func (box *Notebox) DeleteNotefile(ctx context.Context, notefileID string) (err 
 	box.Openfile().lock.Unlock()
 
 	// Delete the note for managing the instance
-	_ = boxfile.DeleteNote(ctx, box.instance.endpointID, notefileNoteID)
+	_ = boxfile.DeleteNote(ctx, nil, box.instance.endpointID, notefileNoteID)
 
 	// Done
 	return nil
@@ -1442,13 +1405,13 @@ func (box *Notebox) checkAddNoteLimits(ctx context.Context, notefileID string, n
 }
 
 // AddNote adds a new note to a notefile, which is a VERY common operation
-func (box *Notebox) AddNote(ctx context.Context, endpointID string, notefileID string, noteID string, note note.Note) (err error) {
+func (box *Notebox) AddNote(ctx context.Context, ei *NotefileEventInfo, endpointID string, notefileID string, noteID string, note note.Note) (err error) {
 	openfile, file, err := box.OpenNotefile(ctx, notefileID)
 	if err != nil {
 		return err
 	}
 
-	_, err = file.AddNote(ctx, endpointID, noteID, note)
+	_, err = file.AddNote(ctx, ei, endpointID, noteID, note)
 
 	openfile.Close(ctx)
 
@@ -1456,13 +1419,13 @@ func (box *Notebox) AddNote(ctx context.Context, endpointID string, notefileID s
 }
 
 // AddNoteWithHistory adds a new note to a notefile, with history supplied
-func (box *Notebox) AddNoteWithHistory(ctx context.Context, endpointID string, notefileID string, noteID string, note note.Note) (err error) {
+func (box *Notebox) AddNoteWithHistory(ctx context.Context, ei *NotefileEventInfo, endpointID string, notefileID string, noteID string, note note.Note) (err error) {
 	openfile, file, err := box.OpenNotefile(ctx, notefileID)
 	if err != nil {
 		return err
 	}
 
-	_, err = file.AddNoteWithHistory(ctx, endpointID, noteID, note)
+	_, err = file.AddNoteWithHistory(ctx, ei, endpointID, noteID, note)
 
 	openfile.Close(ctx)
 
@@ -1470,13 +1433,13 @@ func (box *Notebox) AddNoteWithHistory(ctx context.Context, endpointID string, n
 }
 
 // UpdateNote updates an existing note from notefile
-func (box *Notebox) UpdateNote(ctx context.Context, endpointID string, notefileID string, noteID string, note note.Note) (err error) {
+func (box *Notebox) UpdateNote(ctx context.Context, ei *NotefileEventInfo, endpointID string, notefileID string, noteID string, note note.Note) (err error) {
 	openfile, file, err := box.OpenNotefile(ctx, notefileID)
 	if err != nil {
 		return err
 	}
 
-	err = file.UpdateNote(ctx, endpointID, noteID, note)
+	err = file.UpdateNote(ctx, ei, endpointID, noteID, note)
 
 	openfile.Close(ctx)
 
@@ -1484,13 +1447,13 @@ func (box *Notebox) UpdateNote(ctx context.Context, endpointID string, notefileI
 }
 
 // DeleteNote deletes an existing note from notefile
-func (box *Notebox) DeleteNote(ctx context.Context, endpointID string, notefileID string, noteID string) (err error) {
+func (box *Notebox) DeleteNote(ctx context.Context, ei *NotefileEventInfo, endpointID string, notefileID string, noteID string) (err error) {
 	openfile, file, err := box.OpenNotefile(ctx, notefileID)
 	if err != nil {
 		return err
 	}
 
-	err = file.DeleteNote(ctx, endpointID, noteID)
+	err = file.DeleteNote(ctx, ei, endpointID, noteID)
 
 	openfile.Close(ctx)
 
@@ -1557,7 +1520,7 @@ func (box *Notebox) MergeNotebox(ctx context.Context, fromBoxfile *Notefile) (er
 
 	// Next, merge what's remaining.  This will add and remove remote all remote notefile changes,
 	// as well as updating the global notefile notes that contain NotefileInfo
-	err = boxfile.MergeNotefile(ctx, fromBoxfile)
+	err = boxfile.MergeNotefile(ctx, nil, fromBoxfile)
 	if err != nil {
 		return err
 	}
@@ -1689,25 +1652,6 @@ func (box *Notebox) MergeNotebox(ctx context.Context, fromBoxfile *Notefile) (er
 	}
 
 	// Done with box descriptor
-	return nil
-}
-
-// NoteboxAccessFunc is the func to check an access assertion
-type NoteboxAccessFunc func(httpReq *http.Request, httpRsp http.ResponseWriter, resource string, actions string) (err error)
-
-var fnNoteboxAccess NoteboxAccessFunc
-
-// HubSetAccessControl sets the global notebox function to check access assertions
-func HubSetAccessControl(fn NoteboxAccessFunc) {
-	fnNoteboxAccess = fn
-}
-
-// VerifyAccess checks an assertion of access
-func (box *Notebox) VerifyAccess(resource string, actions string) (err error) {
-	if fnNoteboxAccess != nil {
-		resource = box.defaultEventAppUID + note.ACResourceSep + box.defaultEventDeviceUID + note.ACResourceSep + resource
-		return fnNoteboxAccess(box.clientHTTPReq, box.clientHTTPRsp, resource, actions)
-	}
 	return nil
 }
 

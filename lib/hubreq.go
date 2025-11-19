@@ -31,7 +31,7 @@ var serverSupportsTLS bool
 const maxProtobufStringLength = 253
 
 // NoteboxUpdateEnvFunc is the func to update environment variables for a device
-type NoteboxUpdateEnvFunc func(ctx context.Context, box *Notebox, deviceUID string, appUID string, updateFeeds bool) (err error)
+type NoteboxUpdateEnvFunc func(ctx context.Context, ei *NotefileEventInfo, box *Notebox, deviceUID string, appUID string, updateFeeds bool) (err error)
 
 var fnNoteboxUpdateEnv NoteboxUpdateEnvFunc
 
@@ -41,9 +41,9 @@ func HubSetUpdateEnvironment(ctx context.Context, fn NoteboxUpdateEnvFunc) {
 }
 
 // Update the environment variables for an open notebox
-func hubUpdateEnvVars(ctx context.Context, box *Notebox, deviceUID string, appUID string, updateFeeds bool) {
+func hubUpdateEnvVars(ctx context.Context, ei *NotefileEventInfo, box *Notebox, deviceUID string, appUID string, updateFeeds bool) {
 	if fnNoteboxUpdateEnv != nil {
-		err := fnNoteboxUpdateEnv(ctx, box, deviceUID, appUID, updateFeeds)
+		err := fnNoteboxUpdateEnv(ctx, ei, box, deviceUID, appUID, updateFeeds)
 		if err != nil {
 			logDebug(ctx, "env: can't update env vars: %s", err)
 		}
@@ -51,7 +51,7 @@ func hubUpdateEnvVars(ctx context.Context, box *Notebox, deviceUID string, appUI
 }
 
 // GetNotificationFunc retrieves hub notifications to be sent to client
-type GetNotificationFunc func(ctx context.Context, deviceEndpointID string, session *HubSession) (notifications []string)
+type GetNotificationFunc func(ctx context.Context, deviceEndpointID string, session *HubSession, eventFn EventFunc) (notifications []string)
 
 var fnHubNotifications GetNotificationFunc
 
@@ -423,7 +423,7 @@ func processRequest(ctx context.Context, session *HubSession, req notehubMessage
 }
 
 // Open the endpoint's notebox
-func openHubNoteboxForDevice(ctx context.Context, session *HubSession, deviceUID string, deviceSN string, productUID string, endpointID string, event EventFunc) (box *Notebox, appUID string, err error) {
+func openHubNoteboxForDevice(ctx context.Context, session *HubSession, deviceUID string, deviceSN string, productUID string, endpointID string, event EventFunc) (box *Notebox, ei *NotefileEventInfo, appUID string, err error) {
 	timerName := timerBegin(ctx, "openNoteboxForDevice")
 	defer timerEnd(ctx, timerName)
 
@@ -453,7 +453,7 @@ func openHubNoteboxForDevice(ctx context.Context, session *HubSession, deviceUID
 	}
 
 	// Set the default notification context for files opened within this box instance
-	box.SetEventInfo(deviceUID, deviceSN, productUID, appUID, session.Session.Transport, event, session)
+	ei = EventInfo(deviceUID, deviceSN, productUID, appUID, session.Session.Transport, event, session)
 
 	// If we haven't yet enum'ed the notefiles, do so
 	sawNotefile(session, box, "")
@@ -645,7 +645,7 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 			rsp.MaxChanges = http.StatusContinue
 			notefile = CreateNotefile(false)
 			snote, _ = note.CreateNote(nil, nil)
-			_, err = notefile.AddNote(ctx, req.DeviceEndpointID, specialNoteID, snote)
+			_, err = notefile.AddNote(ctx, nil, req.DeviceEndpointID, specialNoteID, snote)
 			if err != nil {
 				err = fmt.Errorf("addNote error when pending payload: %w", err)
 				return
@@ -759,7 +759,7 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 	}
 
 	// Add the note to the notefile and add it to the response message
-	_, err = notefile.AddNote(ctx, req.DeviceEndpointID, specialNoteID, snote)
+	_, err = notefile.AddNote(ctx, nil, req.DeviceEndpointID, specialNoteID, snote)
 	if err != nil {
 		return err
 	}
@@ -826,7 +826,7 @@ func hubGetNotification(ctx context.Context, session *HubSession, msg notehubMes
 	}
 
 	// Get the notifications pending
-	notifications := fnHubNotifications(ctx, msg.DeviceEndpointID, session)
+	notifications := fnHubNotifications(ctx, msg.DeviceEndpointID, session, event)
 
 	// Sort the notifications into notifications and websocket binary segments to be returned as a payload
 	payload := []byte{}
@@ -853,7 +853,7 @@ func hubGetNotification(ctx context.Context, session *HubSession, msg notehubMes
 			snote, err = note.CreateNote(nil, notePayload)
 			if err == nil {
 				notefile := CreateNotefile(false)
-				_, err = notefile.AddNote(ctx, msg.DeviceEndpointID, "signal", snote)
+				_, err = notefile.AddNote(ctx, nil, msg.DeviceEndpointID, "signal", snote)
 				if err == nil {
 					err = rsp.SetNotefile(notefile)
 				}
@@ -897,7 +897,7 @@ func hubDiscovery(ctx context.Context, session *HubSession, msg notehubMessage, 
 			xnote, err := note.CreateNote(nil, discinfo.HubCert)
 			if err == nil {
 				noteID := "result"
-				_, err = newNotefile.AddNote(ctx, discinfo.HubEndpointID, noteID, xnote)
+				_, err = newNotefile.AddNote(ctx, nil, discinfo.HubEndpointID, noteID, xnote)
 				if err == nil {
 					if rsp.SetNotefile(newNotefile) == nil {
 						rsp.NoteID = noteID
@@ -916,7 +916,7 @@ func hubDiscovery(ctx context.Context, session *HubSession, msg notehubMessage, 
 // Notebox Changes
 func hubNoteboxChanges(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, _, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -945,7 +945,7 @@ func hubNoteboxChanges(ctx context.Context, session *HubSession, req notehubMess
 // Notebox Merge
 func hubNoteboxMerge(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, _, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -981,7 +981,7 @@ func hubNoteboxMerge(ctx context.Context, session *HubSession, req notehubMessag
 // Update the tracker
 func hubNoteboxUpdateChangeTracker(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, _, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1003,7 +1003,7 @@ func hubNoteboxUpdateChangeTracker(ctx context.Context, session *HubSession, req
 // Notefile Changes
 func hubNotefileChanges(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, _, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1044,7 +1044,7 @@ func hubNotefileChanges(ctx context.Context, session *HubSession, req notehubMes
 func hubNotefileMerge(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, ei, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1059,9 +1059,6 @@ func hubNotefileMerge(ctx context.Context, session *HubSession, req notehubMessa
 	}
 	sawNotefile(session, box, req.NotefileID)
 
-	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
-
 	// Unmarshal the notefile
 	notefile, err5 := req.GetNotefile()
 	if err5 != nil {
@@ -1072,7 +1069,7 @@ func hubNotefileMerge(ctx context.Context, session *HubSession, req notehubMessa
 	}
 
 	// Merge the tracked changes
-	err = file.MergeNotefile(ctx, notefile)
+	err = file.MergeNotefile(ctx, ei, notefile)
 	if err != nil {
 		openfile.Close(ctx)
 		box.Close(ctx)
@@ -1093,7 +1090,7 @@ func hubNotefileMerge(ctx context.Context, session *HubSession, req notehubMessa
 // Multi-notefile Merge
 func hubNotefilesMerge(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, ei, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1118,11 +1115,8 @@ func hubNotefilesMerge(ctx context.Context, session *HubSession, req notehubMess
 		}
 		sawNotefile(session, box, NotefileID)
 
-		// Set the notification context
-		file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
-
 		// Merge the tracked changes
-		err = file.MergeNotefile(ctx, chgfile)
+		err = file.MergeNotefile(ctx, ei, chgfile)
 		if err != nil {
 			openfile.Close(ctx)
 			box.Close(ctx)
@@ -1146,7 +1140,7 @@ func hubNotefilesMerge(ctx context.Context, session *HubSession, req notehubMess
 // Update the tracker
 func hubNotefileUpdateChangeTracker(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, _, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1180,7 +1174,7 @@ func hubNotefileUpdateChangeTracker(ctx context.Context, session *HubSession, re
 func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, ei, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1199,12 +1193,9 @@ func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMess
 		rsp.SessionIDMismatch = true
 	}
 
-	// Set the notification context
-	box.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
-
 	// Update the environment vars for the notebox, which may result in a changed _env.dbs
 	timerName = timerBegin(ctx, "updateEnvVars")
-	hubUpdateEnvVars(ctx, box, req.DeviceUID, appUID, true)
+	hubUpdateEnvVars(ctx, ei, box, req.DeviceUID, appUID, true)
 	timerEnd(ctx, timerName)
 
 	// Get the info
@@ -1239,7 +1230,7 @@ func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMess
 // NotefileIDs is overloaded with the OLC 'where' of the note, if any.
 func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, ei, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1262,9 +1253,6 @@ func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMes
 		return
 	}
 	sawNotefile(session, box, req.NotefileID)
-
-	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
 
 	// First, extract the body and payload
 	var body []byte
@@ -1327,7 +1315,7 @@ func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMes
 			newNote.Histories = &histories
 
 			// Add the note to the notefile with history set up here
-			_, err = file.AddNoteWithHistory(ctx, req.DeviceEndpointID, req.NoteID, newNote)
+			_, err = file.AddNoteWithHistory(ctx, ei, req.DeviceEndpointID, req.NoteID, newNote)
 			if err == nil {
 
 				// If this is an outbound queue, purge ALL tombstones from the
@@ -1356,7 +1344,7 @@ func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMes
 // Notefile DeleteNote
 func hubNotefileDeleteNote(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, ei, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1371,11 +1359,8 @@ func hubNotefileDeleteNote(ctx context.Context, session *HubSession, req notehub
 	}
 	sawNotefile(session, box, req.NotefileID)
 
-	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
-
 	// Perform the operation
-	err = file.DeleteNote(ctx, req.DeviceEndpointID, req.NoteID)
+	err = file.DeleteNote(ctx, ei, req.DeviceEndpointID, req.NoteID)
 	if err != nil {
 		openfile.Close(ctx)
 		box.Close(ctx)
@@ -1392,7 +1377,7 @@ func hubNotefileDeleteNote(ctx context.Context, session *HubSession, req notehub
 // Notefile UpdateNote
 func hubNotefileUpdateNote(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, ei, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1406,9 +1391,6 @@ func hubNotefileUpdateNote(ctx context.Context, session *HubSession, req notehub
 		return
 	}
 	sawNotefile(session, box, req.NotefileID)
-
-	// Set the notification context
-	file.SetEventInfo(req.DeviceUID, req.DeviceSN, req.ProductUID, appUID, session.Session.Transport, event, session)
 
 	// Perform the operation
 	xnote, err5 := file.GetNote(req.NoteID)
@@ -1433,7 +1415,7 @@ func hubNotefileUpdateNote(ctx context.Context, session *HubSession, req notehub
 		}
 	}
 	if err == nil {
-		err = file.UpdateNote(ctx, req.DeviceEndpointID, req.NoteID, xnote)
+		err = file.UpdateNote(ctx, ei, req.DeviceEndpointID, req.NoteID, xnote)
 	}
 
 	// Done
@@ -1457,7 +1439,7 @@ func hubReadFile(ctx context.Context, session *HubSession, req notehubMessage, r
 	}
 
 	// Open the box
-	box, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, _, appUID, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return
@@ -1507,7 +1489,7 @@ func hubReadFile(ctx context.Context, session *HubSession, req notehubMessage, r
 		box.Close(ctx)
 		return
 	}
-	_, err = newNotefile.AddNote(ctx, req.DeviceEndpointID, "result", xnote)
+	_, err = newNotefile.AddNote(ctx, nil, req.DeviceEndpointID, "result", xnote)
 	if err != nil {
 		box.Close(ctx)
 		return
@@ -1525,7 +1507,7 @@ func hubReadFile(ctx context.Context, session *HubSession, req notehubMessage, r
 // Notebox Checkpoint
 func hubCheckpoint(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	// Open the box
-	box, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
+	box, _, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
 		err = err2
 		return

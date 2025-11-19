@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/cipher"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -1206,7 +1207,12 @@ func WireBarsFromSession(session *note.DeviceSession) (rat string, bars uint32) 
 	// Return the rat for the session
 	rat = session.Rat
 
-	// Start by assuming great coverage
+	// If there's no coverage indication at all, we can't do the math and so we have no bars
+	if session.Rsrq == 0 && session.Rsrp == 0 && session.Sinr == 0 {
+		return
+	}
+
+	// Start by assuming no coverage
 	bars = 4
 
 	// Handle GSM OR handle LTE at the state when RSRQ can't be computed
@@ -1336,161 +1342,8 @@ func WireExtractSessionContext(ctx context.Context, wire []byte, session *HubSes
 		}
 	}
 
-	// This complicated sequence is to perform this Sscanf, except that golang's Sscanf is so aggressive
-	// that the first %s eats the remainder of the string and does not pay attention to the "," after
-	// it inside the format string. Apparently, %s only works at the end of a format string.
-	// fmt.Sscanf(req.CellID, "%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%s,%s,%s",
-	//     &mcc, &mnc, &lac, &cellid, &rssi, &sinr, &rsrp, &rsrq, &rat, &bearer, &bars, &str1, &str2, &ip)
-	var mcc, mnc, lac, cellid, rssi, sinr, rsrp, rsrq, bearer, bars int
-	var rat, str1, str2, ip string
-	s := strings.Split(req.CellID, ",")
-	if len(s) > 0 {
-		mcc, _ = strconv.Atoi(s[0])
-	}
-	if len(s) > 1 {
-		mnc, _ = strconv.Atoi(s[1])
-	}
-	if len(s) > 2 {
-		lac, _ = strconv.Atoi(s[2])
-	}
-	if len(s) > 3 {
-		cellid, _ = strconv.Atoi(s[3])
-	}
-	if len(s) > 4 {
-		rssi, _ = strconv.Atoi(s[4])
-	}
-	if len(s) > 5 {
-		sinr, _ = strconv.Atoi(s[5])
-	}
-	if len(s) > 6 {
-		rsrp, _ = strconv.Atoi(s[6])
-	}
-	if len(s) > 7 {
-		rsrq, _ = strconv.Atoi(s[7])
-	}
-	if len(s) > 8 {
-		rat = s[8]
-	}
-	if len(s) > 9 {
-		bearer, _ = strconv.Atoi(s[9])
-	}
-	if len(s) > 10 {
-		bars, _ = strconv.Atoi(s[10])
-	}
-	if len(s) > 11 {
-		str1 = s[11]
-	}
-	if len(s) > 12 {
-		str2 = s[12]
-	}
-	if len(s) > 13 {
-		ip = s[13]
-	}
-
-	// Set the network information parsed by CellID
-	if req.CellID == "" || mcc == 0 {
-		session.Session.CellID = ""
-	} else {
-		session.Session.CellID = fmt.Sprintf("%d,%d,%d,%d", mcc, mnc, lac, cellid)
-	}
-	session.Session.Rssi = rssi
-	session.Session.Sinr = sinr
-	session.Session.Rsrp = rsrp
-	session.Session.Rsrq = rsrq
-	session.Session.Rat = rat
-	session.Session.Bars = bars
-	session.Session.Ip = ip
-	if bearer == notecard.NetworkBearerWLan {
-		session.Session.Bssid = str1
-		session.Session.Ssid = str2
-	} else {
-		session.Session.Iccid = str1
-		session.Session.Apn = str2
-	}
-
-	// Assign the base transport type
-	session.Session.Transport = rat
-	switch session.Session.Transport {
-	case "soft":
-		session.Session.Transport = "simulator"
-	case "gsm":
-		session.Session.Transport = "cell:gsm"
-	case "nbiot":
-		session.Session.Transport = "cell:nbiot"
-	case "cdma":
-		session.Session.Transport = "cell:cdma"
-	case "umts":
-		session.Session.Transport = "cell:umts"
-	case "emtc", "CAT-M1":
-		session.Session.Transport = "cell:emtc"
-	case "lte":
-		session.Session.Transport = "cell:lte"
-	}
-
-	// Fix up bearer for old notecards that accidentally zero'ed out
-	// the bearer field rather than setting it to UNKNOWN (-1)
-	if bearer == notecard.NetworkBearerGsm && rat != "gsm" {
-		bearer = notecard.NetworkBearerUnknown
-	}
-
-	// Other cleanups based on bearer
-	switch bearer {
-	case notecard.NetworkBearerGsm:
-		session.Session.Bearer = "GSM"
-		if rat != "gsm" {
-			session.Session.Transport += ":gsm"
-		}
-	case notecard.NetworkBearerTdScdma:
-		session.Session.Bearer = "TD-SCDMA"
-		session.Session.Transport += ":td-scdma"
-	case notecard.NetworkBearerWcdma:
-		session.Session.Bearer = "WCDMA"
-		session.Session.Transport += ":wcdma"
-	case notecard.NetworkBearerCdma2000:
-		session.Session.Bearer = "CDMA2000"
-		session.Session.Transport += ":cdma2000"
-	case notecard.NetworkBearerWiMax:
-		session.Session.Bearer = "WIMAX"
-		session.Session.Transport += ":wimax"
-	case notecard.NetworkBearerLteTdd:
-		session.Session.Bearer = "LTE TDD"
-		if rat == "lte" {
-			session.Session.Transport += ":tdd"
-		} else {
-			session.Session.Transport += ":lte-tdd"
-		}
-	case notecard.NetworkBearerLteFdd:
-		session.Session.Bearer = "LTE FDD"
-		if rat == "lte" {
-			session.Session.Transport += ":fdd"
-		} else {
-			session.Session.Transport += ":lte-fdd"
-		}
-	case notecard.NetworkBearerNBIot:
-		session.Session.Bearer = "NB-IoT"
-		if rat != "nbiot" {
-			session.Session.Transport += ":nbiot"
-		}
-	case notecard.NetworkBearerWLan:
-		session.Session.Bearer = "WiFi"
-		if rat == "wifi-2.4" {
-			session.Session.Transport = "wifi"
-		} else if session.Session.Transport != "wifi" {
-			session.Session.Transport += ":wifi"
-		}
-	case notecard.NetworkBearerBluetooth:
-		session.Session.Bearer = "Bluetooth"
-	case notecard.NetworkBearerIeee802p15p4:
-		session.Session.Bearer = "IEEE 802.15.4"
-	case notecard.NetworkBearerEthernet:
-		session.Session.Bearer = "Ethernet"
-	case notecard.NetworkBearerDsl:
-		session.Session.Bearer = "DSL"
-	case notecard.NetworkBearerPlc:
-		session.Session.Bearer = "PLC"
-	case notecard.NetworkBearerUnknown:
-		session.Session.Bearer = "unknown"
-	}
+	// Extract tower location context from the request (using already-parsed req)
+	extractSessionTowerLocationContext(&req, session)
 
 	// Devices prior to 13701 did this on ALL transactions, but it really
 	// should *only* be performed on NoteboxSummary and Ping transactions
@@ -1500,6 +1353,194 @@ func WireExtractSessionContext(ctx context.Context, wire []byte, session *HubSes
 		session.Session.ScanResults = req.nf.Payload
 	}
 
+	return
+}
+
+// extractSessionTowerLocationContext is a helper that extracts cell tower location fields from a parsed message.
+// It returns towerChanged=true if the cell tower (mcc/mnc/lac/cellid) has changed.
+// If the CellID field is not present in the request, the session structure is not modified.
+func extractSessionTowerLocationContext(req *notehubMessage, session *HubSession) (towerChanged bool) {
+	// Parse CellID if present
+	// This complicated sequence is to perform this Sscanf, except that golang's Sscanf is so aggressive
+	// that the first %s eats the remainder of the string and does not pay attention to the "," after
+	// it inside the format string. Apparently, %s only works at the end of a format string.
+	// fmt.Sscanf(req.CellID, "%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%s,%s,%s",
+	//     &mcc, &mnc, &lac, &cellid, &rssi, &sinr, &rsrp, &rsrq, &rat, &bearer, &bars, &str1, &str2, &ip)
+	if req.CellID != "" {
+		var mcc, mnc, lac, cellid, rssi, sinr, rsrp, rsrq, bearer, bars int
+		var rat, str1, str2, ip string
+		s := strings.Split(req.CellID, ",")
+		if len(s) > 0 {
+			mcc, _ = strconv.Atoi(s[0])
+		}
+		if len(s) > 1 {
+			mnc, _ = strconv.Atoi(s[1])
+		}
+		if len(s) > 2 {
+			lac, _ = strconv.Atoi(s[2])
+		}
+		if len(s) > 3 {
+			cellid, _ = strconv.Atoi(s[3])
+		}
+		if len(s) > 4 {
+			rssi, _ = strconv.Atoi(s[4])
+		}
+		if len(s) > 5 {
+			sinr, _ = strconv.Atoi(s[5])
+		}
+		if len(s) > 6 {
+			rsrp, _ = strconv.Atoi(s[6])
+		}
+		if len(s) > 7 {
+			rsrq, _ = strconv.Atoi(s[7])
+		}
+		if len(s) > 8 {
+			rat = s[8]
+		}
+		if len(s) > 9 {
+			bearer, _ = strconv.Atoi(s[9])
+		}
+		if len(s) > 10 {
+			bars, _ = strconv.Atoi(s[10])
+		}
+		if len(s) > 11 {
+			str1 = s[11]
+		}
+		if len(s) > 12 {
+			str2 = s[12]
+		}
+		if len(s) > 13 {
+			ip = s[13]
+		}
+
+		// Check if cell tower has changed
+		var newCellID string
+		if mcc == 0 {
+			newCellID = ""
+		} else {
+			newCellID = fmt.Sprintf("%d,%d,%d,%d", mcc, mnc, lac, cellid)
+		}
+		if session.Session.CellID != "" && newCellID != "" && session.Session.CellID != newCellID {
+			towerChanged = true
+		}
+
+		// Set the network information parsed by CellID
+		session.Session.CellID = newCellID
+		session.Session.Rssi = rssi
+		session.Session.Sinr = sinr
+		session.Session.Rsrp = rsrp
+		session.Session.Rsrq = rsrq
+		session.Session.Rat = rat
+		session.Session.Bars = bars
+		session.Session.Ip = ip
+		if bearer == notecard.NetworkBearerWLan {
+			session.Session.Bssid = str1
+			session.Session.Ssid = str2
+		} else {
+			session.Session.Iccid = str1
+			session.Session.Apn = str2
+		}
+
+		// Assign the base transport type
+		session.Session.Transport = rat
+		switch session.Session.Transport {
+		case "soft":
+			session.Session.Transport = "simulator"
+		case "gsm":
+			session.Session.Transport = "cell:gsm"
+		case "nbiot":
+			session.Session.Transport = "cell:nbiot"
+		case "cdma":
+			session.Session.Transport = "cell:cdma"
+		case "umts":
+			session.Session.Transport = "cell:umts"
+		case "emtc", "CAT-M1":
+			session.Session.Transport = "cell:emtc"
+		case "lte":
+			session.Session.Transport = "cell:lte"
+		}
+
+		// Fix up bearer for old notecards that accidentally zero'ed out
+		// the bearer field rather than setting it to UNKNOWN (-1)
+		if bearer == notecard.NetworkBearerGsm && rat != "gsm" {
+			bearer = notecard.NetworkBearerUnknown
+		}
+
+		// Other cleanups based on bearer
+		switch bearer {
+		case notecard.NetworkBearerGsm:
+			session.Session.Bearer = "GSM"
+			if rat != "gsm" {
+				session.Session.Transport += ":gsm"
+			}
+		case notecard.NetworkBearerTdScdma:
+			session.Session.Bearer = "TD-SCDMA"
+			session.Session.Transport += ":td-scdma"
+		case notecard.NetworkBearerWcdma:
+			session.Session.Bearer = "WCDMA"
+			session.Session.Transport += ":wcdma"
+		case notecard.NetworkBearerCdma2000:
+			session.Session.Bearer = "CDMA2000"
+			session.Session.Transport += ":cdma2000"
+		case notecard.NetworkBearerWiMax:
+			session.Session.Bearer = "WIMAX"
+			session.Session.Transport += ":wimax"
+		case notecard.NetworkBearerLteTdd:
+			session.Session.Bearer = "LTE TDD"
+			if rat == "lte" {
+				session.Session.Transport += ":tdd"
+			} else {
+				session.Session.Transport += ":lte-tdd"
+			}
+		case notecard.NetworkBearerLteFdd:
+			session.Session.Bearer = "LTE FDD"
+			if rat == "lte" {
+				session.Session.Transport += ":fdd"
+			} else {
+				session.Session.Transport += ":lte-fdd"
+			}
+		case notecard.NetworkBearerNBIot:
+			session.Session.Bearer = "NB-IoT"
+			if rat != "nbiot" {
+				session.Session.Transport += ":nbiot"
+			}
+		case notecard.NetworkBearerWLan:
+			session.Session.Bearer = "WiFi"
+			if rat == "wifi-2.4" {
+				session.Session.Transport = "wifi"
+			} else if session.Session.Transport != "wifi" {
+				session.Session.Transport += ":wifi"
+			}
+		case notecard.NetworkBearerBluetooth:
+			session.Session.Bearer = "Bluetooth"
+		case notecard.NetworkBearerIeee802p15p4:
+			session.Session.Bearer = "IEEE 802.15.4"
+		case notecard.NetworkBearerEthernet:
+			session.Session.Bearer = "Ethernet"
+		case notecard.NetworkBearerDsl:
+			session.Session.Bearer = "DSL"
+		case notecard.NetworkBearerPlc:
+			session.Session.Bearer = "PLC"
+		case notecard.NetworkBearerUnknown:
+			session.Session.Bearer = "unknown"
+		}
+	}
+
+	return
+}
+
+// WireExtractSessionTowerLocationContext extracts cell tower location fields from a wire-format request.
+// This function can be called on any transaction to update tower location context.
+// It returns towerChanged=true if the cell tower (mcc/mnc/lac/cellid) has changed.
+// If the CellID field is not present in the request, the session structure is not modified.
+func WireExtractSessionTowerLocationContext(ctx context.Context, wire []byte, session *HubSession) (towerChanged bool, err error) {
+	var req notehubMessage
+	req, _, err = msgFromWire(ctx, wire)
+	if err != nil {
+		return
+	}
+
+	towerChanged = extractSessionTowerLocationContext(&req, session)
 	return
 }
 
@@ -1945,8 +1986,12 @@ func WireReadRequest(ctx context.Context, conn net.Conn, waitIndefinitely bool) 
 		var err2 error
 		versionLen := 1
 		version = make([]byte, versionLen)
-		if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
-			logError(ctx, "SetReadDeadline: %v", err)
+		if err = conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				err = fmt.Errorf("wire read:  " + note.ErrClosed + " connection closed")
+				return
+			}
+			logError(ctx, "SetReadDeadline (version): %v", err)
 		}
 
 		n, err2 = rdconn.Read(version)
@@ -1971,7 +2016,7 @@ func WireReadRequest(ctx context.Context, conn net.Conn, waitIndefinitely bool) 
 			return
 		}
 		if n != versionLen {
-			err = fmt.Errorf("wire read: insufficient data to read format: %d/%d", n, versionLen)
+			err = fmt.Errorf("wire read: insufficient data to read protocol version: %d/%d", n, versionLen)
 			return
 		}
 		bytesRead += uint32(n)
@@ -1987,8 +2032,12 @@ func WireReadRequest(ctx context.Context, conn net.Conn, waitIndefinitely bool) 
 
 	// Read the header
 	header := make([]byte, headerLength)
-	if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
-		logError(ctx, "SetReadDeadline: %v", err)
+	if err = conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+		if errors.Is(err, net.ErrClosed) {
+			err = fmt.Errorf("wire read:  " + note.ErrClosed + " connection closed")
+			return
+		}
+		logError(ctx, "SetReadDeadline (header): %v", err)
 	}
 	if debugWireRead {
 		logDebug(ctx, "rdHeader(%d)", len(header))
@@ -2021,8 +2070,12 @@ func WireReadRequest(ctx context.Context, conn net.Conn, waitIndefinitely bool) 
 	var protobuf []byte
 	if protobufLength != 0 {
 		protobuf = make([]byte, protobufLength)
-		if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
-			logError(ctx, "SetReadDeadline: %v", err)
+		if err = conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				err = fmt.Errorf("wire read:  " + note.ErrClosed + " connection closed")
+				return
+			}
+			logError(ctx, "SetReadDeadline (protobuf): %v", err)
 		}
 		if debugWireRead {
 			logDebug(ctx, "rdProtobuf(%d)", len(protobuf))
@@ -2057,8 +2110,12 @@ func WireReadRequest(ctx context.Context, conn net.Conn, waitIndefinitely bool) 
 	var binary []byte
 	if binaryLength != 0 {
 		binary = make([]byte, binaryLength)
-		if err := conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
-			logError(ctx, "SetReadDeadline: %v", err)
+		if err = conn.SetReadDeadline(time.Now().Add(timeoutDuration)); err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				err = fmt.Errorf("wire read:  " + note.ErrClosed + " connection closed")
+				return
+			}
+			logError(ctx, "SetReadDeadline (binary): %v", err)
 		}
 		if debugWireRead {
 			logDebug(ctx, "rdBinary(%d)", len(binary))

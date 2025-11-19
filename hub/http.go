@@ -73,8 +73,8 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 		var box *notelib.Notebox
 		box, err = notelib.OpenEndpointNotebox(ctx, hubEndpointID, deviceStorageObject, false)
 		if err == nil {
-			box.SetEventInfo(deviceUID, device.DeviceSN, device.ProductUID, appUID, "api:http", notehubEvent, nil)
-			rspJSON = box.Request(ctx, hubEndpointID, reqJSON)
+			ei := notelib.EventInfo(deviceUID, device.DeviceSN, device.ProductUID, appUID, "api:http", notehubEvent, nil)
+			rspJSON = box.Request(ctx, ei, hubEndpointID, reqJSON)
 			box.Close(ctx)
 		}
 	}
