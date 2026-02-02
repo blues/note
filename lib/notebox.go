@@ -82,7 +82,7 @@ func parseCompositeNoteID(noteid string) (isInstance bool, endpoint string, note
 }
 
 // Initialize notebox storage
-func initNotebox(ctx context.Context, endpointID string, boxStorage string, storage storageClass) (err error) {
+func initNotebox(ctx context.Context, endpointID string, boxStorage string, storage storage) (err error) {
 	// Create the notefile for the notebox
 	boxfile := CreateNotefile(false)
 
@@ -761,7 +761,7 @@ func NotefileAttributesFromID(notefileID string) (isQueue bool, syncToHub bool, 
 	components := strings.Split(notefileID, ".")
 	numComponents := len(components)
 	if numComponents < 2 {
-		err = fmt.Errorf("notefileID must end in a recognized type: %s", notefileID)
+		err = fmt.Errorf("notefileID must end in a recognized type: %s "+note.ErrNotefileName, notefileID)
 		return
 	}
 	notefileType := components[numComponents-1]
@@ -803,7 +803,7 @@ func NotefileAttributesFromID(notefileID string) (isQueue bool, syncToHub bool, 
 
 	// If we haven't gotten a type or exhausted the option flags, it's unrecognized
 	if !validType || notefileType != "" {
-		err = fmt.Errorf("notefile type not recognized: %s", extension)
+		err = fmt.Errorf("notefile type not recognized: %s "+note.ErrNotefileName, extension)
 	}
 
 	// Done
@@ -1380,11 +1380,11 @@ func (box *Notebox) GetNote(ctx context.Context, notefileID string, noteID strin
 }
 
 // Checks a notefile and rejects attempts to add more than 100 notes
-func (box *Notebox) checkAddNoteLimits(ctx context.Context, notefileID string, note note.Note) (err error) {
+func (box *Notebox) checkAddNoteLimits(ctx context.Context, notefileID string, noteObj note.Note) (err error) {
 
 	payloadMaxBytes := 256 // Arduino MQQT payloads are 256
-	if note.Payload != nil && len(note.Payload) > payloadMaxBytes {
-		return fmt.Errorf("%d-byte payload (maximum of %d bytes allowed)", len(note.Payload), payloadMaxBytes)
+	if noteObj.Payload != nil && len(noteObj.Payload) > payloadMaxBytes {
+		return fmt.Errorf("%d-byte payload (maximum of %d bytes allowed) "+note.ErrTooBig, len(noteObj.Payload), payloadMaxBytes)
 	}
 
 	openfile, file, err := box.OpenNotefile(ctx, notefileID)
@@ -1393,10 +1393,10 @@ func (box *Notebox) checkAddNoteLimits(ctx context.Context, notefileID string, n
 	}
 
 	notes := file.CountNotes(false)
-	notesMax := 100
+	notesMax := MaxNotes
 	if notes >= notesMax {
 		openfile.Close(ctx)
-		return fmt.Errorf("a maximum of %d notes may be pending for device (currently %d)", notesMax, notes)
+		return fmt.Errorf("a maximum of %d notes may be pending for device (currently %d) %s", notesMax, notes, note.ErrTooManyNotes)
 	}
 
 	openfile.Close(ctx)

@@ -7,57 +7,38 @@ package notelib
 
 import (
 	"context"
-	"fmt"
 	"runtime/debug"
 	"strings"
 )
 
-// This is an important policy that defines how we handle filenames.  When true, "." is replaced with "-" and .json is appended,
-// but when false the filename is left as-is except for a bit of cleaning.
-const cleanWithJSONExtension = false
-
-// Default filename
 const (
+	// Default filename
 	defaultFileStorageName = "notefiles"
 	defaultFileStorageExt  = ".db"
+
+	// This is an important policy that defines how we handle filenames.  When true, "." is replaced with "-" and .json is appended,
+	// but when false the filename is left as-is except for a bit of cleaning.
+	cleanWithJSONExtension = false
+
+	// Storage class name
+	fileStorageClass = "file"
 )
 
-// Root storage location
-var fsRootStorageLocation = "."
+var (
+	// Root storage location
+	fsRootStorageLocation = "."
+
+	// Default file I/O package
+	fio FileIO = &filesystem{}
+)
 
 // FileSetStorageLocation sets the root location for storage
 func FileSetStorageLocation(root string) {
 	fsRootStorageLocation = root
 }
 
-// Default file I/O package
-var fio = &fileioDefault
-
-// fileStorage creates a new storage object
-func fileStorage() storageClass {
-	fs := storageClass{}
-	fs.class = "file"
-	fs.create = fsCreate
-	fs.createObject = fsCreateObject
-	fs.delete = fsDelete
-	fs.writeNotefile = fsWriteNotefile
-	fs.readNotefile = fsReadNotefile
-	return fs
-}
-
-// isFileStorage sees whether or not a storage object is a file storage object
-func isFileStorage(storageObject string) bool {
-	components := strings.Split(storageObject, ":")
-	if len(components) >= 1 {
-		if components[0] == fileStorage().class {
-			return true
-		}
-	}
-	return false
-}
-
 // FileSetHandler sets an alternate file I/O package
-func FileSetHandler(newfio *Fileio) {
+func FileSetHandler(newfio FileIO) {
 	fio = newfio
 }
 
@@ -67,17 +48,12 @@ func FileStorageObject(containerName string) string {
 	name := fsFilename(containerName, defaultFileStorageName)
 
 	// Return it as a storage object name
-	return fileStorage().class + ":" + name
-}
-
-// FileDefaultStorageObject gives a deterministic storage object name from two components
-func FileDefaultStorageObject() string {
-	return FileStorageObject("")
+	return fileStorageClass + ":" + name
 }
 
 // Remove the scheme if it's present
 func fsRemoveScheme(storageObject string) string {
-	scheme := fileStorage().class + ":"
+	scheme := fileStorageClass + ":"
 	if !strings.HasPrefix(storageObject, scheme) {
 		return storageObject
 	}
@@ -148,10 +124,7 @@ func fsFilename(storageHint string, filenameHint string) string {
 	// that if it's the file system, we know that we need to clean it because of the colons, but
 	// otherwise, let it pass through.
 	if storageHint != "" {
-		if fio == &fileioDefault {
-			return fsCleanName(storageHint) + "/" + cleanFilename
-		}
-		return storageHint + "/" + cleanFilename
+		return fio.CleanName(storageHint) + "/" + cleanFilename
 	}
 
 	// Return just the clean filename
@@ -179,83 +152,6 @@ func fsPath(filename string) string {
 	return fsRoot() + "/" + filename
 }
 
-// Create a file system object within the folder suggested by storageHint, but without that folder
-// specified in the storageObject path returned.
-func fsCreate(ctx context.Context, storageHint string, filenameHint string) (storageObject string, err error) {
-	// Find a path that doesn't yet exist
-	container, _ := fsNamesFromFileStorageObject(storageHint)
-	name := fsFilename(container, filenameHint)
-
-	// If and only if we're cleaning, select a path that doesn't exist - else overwrite the file
-	if cleanWithJSONExtension {
-		for i := 1; ; i++ {
-
-			exists, err2 := fio.Exists(ctx, fsPath(name))
-			if err2 != nil {
-				err = err2
-				return
-			}
-			if !exists {
-				break
-			}
-
-			name = fsFilename(container, fmt.Sprintf("%s%d", filenameHint, i))
-
-		}
-	}
-
-	// Create it, thus reserving its name.  Note that if it exists we must overwrite it (as the
-	// comment above specifies).  This has the effect of self-healing rather than blocking
-	// operations where the high level file descriptor was lost and the file is now being recreated.
-	// (Note that this is particularly important when !cleanWithJSONExtension, else a new unique
-	// file object would have been created in that case.)
-	path := fsPath(name)
-	err = fio.Create(ctx, path)
-	if err != nil {
-		if deletionForbidden(ctx, path) {
-			err = fmt.Errorf("file: can't re-create %s: %s", path, err)
-			return
-		}
-		_ = fio.Delete(ctx, path)
-		err = fio.Create(ctx, path)
-		if err != nil {
-			return
-		}
-	}
-
-	// Regenerate the name by removing the storage container
-	_, name = fsNamesFromFileStorageObject(name)
-
-	// Create an object name from this name WITHOUT the container
-	return fileStorage().class + ":" + name, nil
-}
-
-// Create a file system object given an explicit storage object name, assuming that this already has the
-// container within the storageObject specifier
-func fsCreateObject(ctx context.Context, storageObject string) (err error) {
-	// Get the filename from the storage object name
-	name := fsRemoveScheme(storageObject)
-
-	// Create it (and overwrite it if it already exists), thus reserving it.  In normal cases
-	// we don't try to create an object that already exists, and so the fact that we overwrite
-	// is simply defensive coding.
-	path := fsPath(name)
-	err = fio.Create(ctx, path)
-	if err != nil {
-		if deletionForbidden(ctx, path) {
-			return fmt.Errorf("file: can't re-create %s: %s", path, err)
-		}
-		_ = fio.Delete(ctx, path)
-		err = fio.Create(ctx, path)
-		if err != nil {
-			return
-		}
-	}
-
-	// Done
-	return nil
-}
-
 // Convert two storage objects to a file path
 func fsObjectsToPath(iContainer string, iObject string) string {
 	// Remove schemes
@@ -278,15 +174,6 @@ func fsObjectsToPath(iContainer string, iObject string) string {
 	return path
 }
 
-// Delete a file system object
-func fsDelete(ctx context.Context, container string, object string) (err error) {
-	path := fsObjectsToPath(container, object)
-	if deletionForbidden(ctx, path) {
-		return nil
-	}
-	return fio.Delete(ctx, path)
-}
-
 // It is quite catastrophic if we attempt to delete the entire file storage root, because for NTN
 // recovery is simply impossible.  As such, we treat this like a 'bug check' and forbid the operation.
 func deletionForbidden(ctx context.Context, path string) bool {
@@ -299,54 +186,4 @@ func deletionForbidden(ctx context.Context, path string) bool {
 	// This should be so incredibly rare that if it does happen we want to see exactly why we are here
 	logError(ctx, "[dbwarn] attempt to delete file storage root via:\n%s", debug.Stack())
 	return true
-}
-
-// Writes a notefile to the specified file
-func fsWriteNotefile(ctx context.Context, file *Notefile, container string, object string) (err error) {
-	// Convert to JSON
-	jsonNotefile, err := file.uConvertToJSON(true)
-	if err != nil {
-		logWarn(ctx, "file: error converting %d-note notefile %s to json: %s", len(file.Notes), object, err)
-		return err
-	}
-
-	// Open the file, truncating it
-	path := fsObjectsToPath(container, object)
-	err = fio.WriteJSON(ctx, path, jsonNotefile)
-	if err != nil {
-		return
-	}
-
-	// Debug
-	if debugFile {
-		logDebug(ctx, "file: wrote %s %db containing %d notes", object, len(jsonNotefile), len(file.Notes))
-	}
-
-	// Done
-	return nil
-}
-
-// Reads a notefile from the specified file
-func fsReadNotefile(ctx context.Context, container string, object string) (notefile *Notefile, err error) {
-	// Read the file
-	path := fsObjectsToPath(container, object)
-	contents, err := fio.ReadJSON(ctx, path)
-	if err != nil {
-		return &Notefile{}, err
-	}
-
-	// Unmarshal the contents
-	file, err := jsonConvertJSONToNotefile(contents)
-	if err != nil {
-		logWarn(ctx, "file: error converting notefile %s to json: %s", object, err)
-		return &Notefile{}, err
-	}
-
-	// Debug
-	if debugFile {
-		logDebug(ctx, "file: read %s %db containing %d notes", object, len(contents), len(file.Notes))
-	}
-
-	// Done
-	return file, nil
 }

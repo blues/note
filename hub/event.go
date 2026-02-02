@@ -75,7 +75,7 @@ func eventBulk(session *notelib.HubSession, local bool, event note.Event) (err e
 	}
 
 	// Begin decode of payload using this template
-	bdc, err := notelib.BulkDecodeTemplate(bodyJSON, event.Payload)
+	bdc, err := notelib.BulkDecodeTemplate(context.Background(), bodyJSON, event.Payload)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func eventBulk(session *notelib.HubSession, local bool, event note.Event) (err e
 	for {
 
 		// Get the next entry
-		body, payload, when, wherewhen, olc, _, success := bdc.BulkDecodeNextEntry()
+		body, payload, when, wherewhen, olc, _, success := bdc.BulkDecodeNextEntry(context.Background())
 		if !success {
 			break
 		}

@@ -2,6 +2,7 @@ package notelib
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -25,13 +26,15 @@ func abs(n int64) int64 {
 }
 
 func TestBulkDecode(t *testing.T) {
+	ctx := context.Background()
 	context, err := BulkDecodeTemplate(
+		ctx,
 		[]byte(`{"format":2,"storage":"file:data/test_note-qo.000","template_body":"{\"id\":24,\"description\":\"type_hint\"}","template_payload":1024}`),
 		[]byte{167, 1, 152, 1, 38, 0, 2, 182, 219, 68, 209, 235, 39, 23, 137, 112, 31, 54, 63, 130, 138, 24, 0, 0, 0, 0, 13, 0, 49, 50, 56, 32, 98, 121, 116, 101, 32, 110, 111, 116, 101, 128, 1, 20, 254, 1, 0, 238, 1, 0},
 	)
 	require.NoError(t, err)
 
-	body, payload, when, wherewhen, olc, _, success := context.BulkDecodeNextEntry()
+	body, payload, when, wherewhen, olc, _, success := context.BulkDecodeNextEntry(ctx)
 
 	require.Equal(t, map[string]interface{}{"description": "128 byte note"}, body)
 	require.Equal(t, bytes.Repeat([]byte{0}, 128), payload)
@@ -40,7 +43,7 @@ func TestBulkDecode(t *testing.T) {
 	require.Equal(t, "87JC9RF9+86XJ", olc)
 	require.Equal(t, true, success)
 
-	body, payload, when, wherewhen, olc, _, success = context.BulkDecodeNextEntry()
+	body, payload, when, wherewhen, olc, _, success = context.BulkDecodeNextEntry(ctx)
 
 	require.Nil(t, body)
 	require.Nil(t, payload)
@@ -51,7 +54,7 @@ func TestBulkDecode(t *testing.T) {
 }
 
 func TestBulkEncode(t *testing.T) {
-
+	ctx := context.Background()
 	templateJSON := `{"sensor12":{"temp":12.1,"humidity":12.1},"mylist11":[{"val":11},{"val":11}],"mylist12":[{"val":12},{"val":12}],"mylist13":[{"val":13},{"val":13}],"mylist14":[{"val":14},{"val":14}],"mylist18":[{"val":18},{"val":18}],"mylist21":[{"val":21},{"val":21}],"mylist22":[{"val":22},{"val":22}],"mylist23":[{"val":23},{"val":23}],"mylist24":[{"val":24},{"val":24}],"sep14":"0","sensor14":{"temp":14.1,"humidity":14.1},"sep23":"0","sensor18":{"temp":18.1,"humidity":18.1},"bool1":true,"bool2":true,"bool3":true,"bool4":true,"bool5":true,"bool6":true,"bool7":true,"bool8":true,"bool9":true}`
 
 	bulkBody := BulkBody{}
@@ -69,7 +72,7 @@ func TestBulkEncode(t *testing.T) {
 	err = note.JSONUnmarshal([]byte(dataJSON), &data)
 	require.NoError(t, err)
 
-	output, err := context.BulkEncodeNextEntry(data, []byte{}, 0, 0, "", "", false)
+	output, err := context.BulkEncodeNextEntry(ctx, data, []byte{}, 0, 0, "", "", false)
 	require.NoError(t, err)
 
 	if verboseBulkTest {
@@ -79,10 +82,10 @@ func TestBulkEncode(t *testing.T) {
 	require.Equal(t, []byte{0x8, 0x63, 0x0, 0xb8, 0xd7, 0xbc, 0x58, 0x80, 0x7f, 0x0, 0x80, 0xff, 0x7f, 0x0, 0x0, 0x80, 0xff, 0xff, 0x7f, 0x0, 0x0, 0x0, 0x80, 0xff, 0xff, 0xff, 0x7f, 0x8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x80, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f, 0x0, 0xff, 0x0, 0x0, 0xff, 0xff, 0x0, 0x0, 0x0, 0xff, 0xff, 0xff, 0x0, 0x0, 0x0, 0x0, 0xff, 0xff, 0xff, 0xff, 0x0, 0x0, 0xf0, 0xff, 0x3f, 0x7c, 0x6f, 0xfc, 0x7e, 0xa, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x53, 0x65, 0x70, 0x32, 0x33, 0x65, 0x8d, 0x92, 0x4e, 0xb1, 0x94, 0xe1, 0x7f, 0xed, 0x15, 0x3b, 0x1a, 0x99, 0x31, 0x66, 0x0, 0x35, 0x1},
 		output)
 
-	context, err = BulkDecodeTemplate(bulkBodyJSON, output)
+	context, err = BulkDecodeTemplate(ctx, bulkBodyJSON, output)
 	require.NoError(t, err)
 
-	body, payload, _, _, _, _, success := context.BulkDecodeNextEntry()
+	body, payload, _, _, _, _, success := context.BulkDecodeNextEntry(ctx)
 	require.Equal(t, true, success)
 	require.Equal(t, "", string(payload))
 
@@ -212,6 +215,8 @@ var bulkTests = []struct {
 }
 
 func TestVariableLengthArrays(t *testing.T) {
+	ctx := context.Background()
+
 	tests := []struct {
 		name     string
 		template string
@@ -361,7 +366,7 @@ func TestVariableLengthArrays(t *testing.T) {
 			encodeCtx, err := BulkEncodeTemplate(templateJSON)
 			require.NoError(t, err)
 
-			output, err := encodeCtx.BulkEncodeNextEntry(tt.data, []byte{}, 0, 0, "", "", false)
+			output, err := encodeCtx.BulkEncodeNextEntry(ctx, tt.data, []byte{}, 0, 0, "", "", false)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -369,10 +374,10 @@ func TestVariableLengthArrays(t *testing.T) {
 			require.NoError(t, err)
 
 			// Test decoding
-			decodeCtx, err := BulkDecodeTemplate(templateJSON, output)
+			decodeCtx, err := BulkDecodeTemplate(ctx, templateJSON, output)
 			require.NoError(t, err)
 
-			body, payload, _, _, _, _, success := decodeCtx.BulkDecodeNextEntry()
+			body, payload, _, _, _, _, success := decodeCtx.BulkDecodeNextEntry(ctx)
 			require.True(t, success)
 			require.Empty(t, payload)
 
@@ -405,6 +410,8 @@ func haversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 }
 
 func TestBulkFlagNoVariable(t *testing.T) {
+	ctx := context.Background()
+
 	// Test that bulkFlagNoVariable works correctly on decode with multiple records
 	// This flag indicates no variable-length section, so no 2-byte offset is present
 	// and no variable data (payload, flags, OLC) can be included
@@ -446,7 +453,7 @@ func TestBulkFlagNoVariable(t *testing.T) {
 	}
 
 	// Test decoding all three records
-	decodeCtx, err := BulkDecodeTemplate(templateJSON, binaryData)
+	decodeCtx, err := BulkDecodeTemplate(ctx, templateJSON, binaryData)
 	require.NoError(t, err)
 
 	// Expected values for each record
@@ -461,7 +468,7 @@ func TestBulkFlagNoVariable(t *testing.T) {
 	}
 
 	for i, expected := range expectedRecords {
-		body, payload, _, _, _, _, success := decodeCtx.BulkDecodeNextEntry()
+		body, payload, _, _, _, _, success := decodeCtx.BulkDecodeNextEntry(ctx)
 		require.True(t, success, "Decoding record %d should succeed", i+1)
 		require.Empty(t, payload, "No payload expected with NO_VARIABLE flag for record %d", i+1)
 		require.NotNil(t, body, "Body should not be nil for record %d", i+1)
@@ -507,7 +514,7 @@ func TestBulkFlagNoVariable(t *testing.T) {
 	}
 
 	// Check that there are no more records
-	body, _, _, _, _, _, success := decodeCtx.BulkDecodeNextEntry()
+	body, _, _, _, _, _, success := decodeCtx.BulkDecodeNextEntry(ctx)
 	require.False(t, success, "Should have no more records after processing all three")
 	require.Nil(t, body, "Body should be nil when no more records")
 
@@ -522,7 +529,7 @@ func TestBulkFlagNoVariable(t *testing.T) {
 		"pressure": 67305985,
 	}
 
-	encoded, err := encodeCtx.BulkEncodeNextEntry(data, []byte{}, 0, 0, "", "", false)
+	encoded, err := encodeCtx.BulkEncodeNextEntry(ctx, data, []byte{}, 0, 0, "", "", false)
 	require.NoError(t, err)
 
 	// Verify the encoded data does NOT have bulkFlagNoVariable set
@@ -534,6 +541,7 @@ func TestBulkFlagNoVariable(t *testing.T) {
 }
 
 func TestBulkEncodeDecode(t *testing.T) {
+	ctx := context.Background()
 	for _, test := range bulkTests {
 		expectedJSON, err := note.JSONMarshal(test.data)
 		require.NoError(t, err)
@@ -552,7 +560,7 @@ func TestBulkEncodeDecode(t *testing.T) {
 		context, err := BulkEncodeTemplate(templateBodyJSON)
 		assert.NoError(t, err)
 
-		output, err := context.BulkEncodeNextEntry(test.data, []byte{}, 0, 0, "", "", false)
+		output, err := context.BulkEncodeNextEntry(ctx, test.data, []byte{}, 0, 0, "", "", false)
 		if test.wantErr {
 			assert.Error(t, err)
 			continue
@@ -563,10 +571,10 @@ func TestBulkEncodeDecode(t *testing.T) {
 			fmt.Printf("Binary: %v\n", output)
 		}
 
-		context, err = BulkDecodeTemplate(templateBodyJSON, output)
+		context, err = BulkDecodeTemplate(ctx, templateBodyJSON, output)
 		assert.NoError(t, err)
 
-		body, payload, _, _, _, _, success := context.BulkDecodeNextEntry()
+		body, payload, _, _, _, _, success := context.BulkDecodeNextEntry(ctx)
 		assert.Equal(t, true, success, "BulkDecodeNextEntry failed")
 		assert.Equal(t, "", string(payload))
 
@@ -623,6 +631,7 @@ func TestOLCEncodingRoundTrip(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		ctx := context.Background()
 		t.Run(tt.name, func(t *testing.T) {
 			// Create template with the OLC field (use FlexNano to avoid compression)
 			templateBody := BulkBody{
@@ -641,7 +650,7 @@ func TestOLCEncodingRoundTrip(t *testing.T) {
 			encodeCtx, err := BulkEncodeTemplate(templateJSON)
 			require.NoError(t, err)
 
-			output, err := encodeCtx.BulkEncodeNextEntry(testData, []byte{},
+			output, err := encodeCtx.BulkEncodeNextEntry(ctx, testData, []byte{},
 				1234567890, 1234567880, testOLC, "test-note", false)
 			require.NoError(t, err)
 
@@ -649,10 +658,10 @@ func TestOLCEncodingRoundTrip(t *testing.T) {
 			t.Logf("Output bytes: %v", output)
 
 			// Decode - the output is not compressed, pass it directly
-			decodeCtx, err := BulkDecodeTemplate(templateJSON, output)
+			decodeCtx, err := BulkDecodeTemplate(ctx, templateJSON, output)
 			require.NoError(t, err)
 
-			body, _, _, _, decodedOLC, _, success := decodeCtx.BulkDecodeNextEntry()
+			body, _, _, _, decodedOLC, _, success := decodeCtx.BulkDecodeNextEntry(ctx)
 			require.True(t, success)
 
 			// The OLC fields are extracted during decoding and removed from the body
@@ -704,6 +713,7 @@ func TestOLCEncodingRoundTrip(t *testing.T) {
 // TestBulkTimeFieldType23 tests the type 23 encoding for _time field
 // which provides 256-second granularity to save 1 byte for satellite
 func TestBulkTimeFieldType23(t *testing.T) {
+	ctx := context.Background()
 	// Simple test: create a template with _time field of type 23,
 	// encode and decode it, verify the time is within expected range
 	t.Run("type_23_time_field", func(t *testing.T) {
@@ -727,14 +737,14 @@ func TestBulkTimeFieldType23(t *testing.T) {
 		// Get current time just before encoding
 		timeBeforeEncode := time.Now().UTC().Unix()
 
-		output, err := context.BulkEncodeNextEntry(data, []byte{}, 0, 0, "", "", false)
+		output, err := context.BulkEncodeNextEntry(ctx, data, []byte{}, 0, 0, "", "", false)
 		require.NoError(t, err)
 
 		// Decode
-		context, err = BulkDecodeTemplate(bulkBodyJSON, output)
+		context, err = BulkDecodeTemplate(ctx, bulkBodyJSON, output)
 		require.NoError(t, err)
 
-		body, _, when, _, _, _, success := context.BulkDecodeNextEntry()
+		body, _, when, _, _, _, success := context.BulkDecodeNextEntry(ctx)
 		require.True(t, success)
 
 		// The decoded time should be within 256*2 seconds of the current time
@@ -758,6 +768,7 @@ func TestBulkTimeFieldType23(t *testing.T) {
 
 	// Compare type 23 vs type 14 to show the space savings
 	t.Run("type_23_vs_type_14_size", func(t *testing.T) {
+		ctx := context.Background()
 		// Template with type 14 _time field (4 bytes)
 		template14 := `{"_time":14,"sensor":12.1}`
 		bulkBody14 := BulkBody{}
@@ -784,9 +795,9 @@ func TestBulkTimeFieldType23(t *testing.T) {
 			"sensor": 25.5,
 		}
 
-		output14, err := context14.BulkEncodeNextEntry(data, []byte{}, 0, 0, "", "", false)
+		output14, err := context14.BulkEncodeNextEntry(ctx, data, []byte{}, 0, 0, "", "", false)
 		require.NoError(t, err)
-		output23, err := context23.BulkEncodeNextEntry(data, []byte{}, 0, 0, "", "", false)
+		output23, err := context23.BulkEncodeNextEntry(ctx, data, []byte{}, 0, 0, "", "", false)
 		require.NoError(t, err)
 
 		// Type 23 should use 1 byte less (3 bytes vs 4 bytes for time)

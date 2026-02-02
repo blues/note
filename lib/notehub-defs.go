@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/blues/note-go/note"
@@ -200,19 +201,19 @@ type HubSession struct {
 	Session            note.DeviceSession
 
 	// Information about the current session
-	SessionStart time.Time
-	AppUID       string
-	Active       bool
-	Terminated   bool
-	Transactions int
+	SessionStart               time.Time
+	AppUID                     string
+	Active                     bool
+	Terminated                 bool
+	Transactions               int
+	LastCalibratedNotecardTime int64
 
 	// Used for hubreq.go to retain inter-transaction state
-	Notefiles         []string
-	NotefilesUpdated  bool
-	PendingWebPayload []byte
-	DeviceMonitorID   int64
-	BinTemplateCrc16  uint16
-	BinTemplateJSON   []byte
+	Notefiles        []string
+	NotefilesUpdated bool
+	DeviceMonitorID  int64
+	BinTemplateCrc16 uint16
+	BinTemplateJSON  []byte
 
 	// For websocket I/O
 	SocketTransmit   func(ctx context.Context, session *HubSession, data []byte) error
@@ -256,18 +257,40 @@ func InitDeviceSession(sess *note.DeviceSession, handlerAddr string, sessType Se
 	sess.Period().Since = sess.SessionBegan
 	sess.Handler = handlerAddr
 	sess.TLSSession = false
+	sess.TimeBoundedSession = false
 	switch sessType {
 	case SessionTypeTLS:
 		sess.TLSSession = true
 		sess.Period().TLSSessions++
+		sess.Transport = "tls"
 	case SessionTypeTCP:
 		sess.Period().TCPSessions++
+		sess.Transport = "tcp"
 	case SessionTypePacket:
+		sess.TimeBoundedSession = true
 		sess.Period().PacketSessions++
+		sess.Transport = "packet"
 	case SessionTypeWebhook:
+		sess.TimeBoundedSession = true
 		sess.Period().WebhookSessions++
+		sess.Transport = "webhook"
 	}
 	return now
+}
+
+// IsSessionTimeBoundedByTransport determines if a transport string represents a time-bounded session.
+// Time-bounded sessions (packet/webhook) use persistent session storage that survives
+// gaps in connectivity. Regular sessions (WiFi/cellular) use the TCP session log mechanism.
+func IsSessionTimeBoundedByTransport(transport string) bool {
+	return strings.HasPrefix(transport, "ntn:") ||
+		strings.HasPrefix(transport, "webhook:") ||
+		transport == "packet" ||
+		transport == "webhook"
+}
+
+// IsSessionTimeBoundedByType determines if a session type represents a time-bounded session.
+func IsSessionTimeBoundedByType(sessType SessionType) bool {
+	return sessType == SessionTypePacket || sessType == SessionTypeWebhook
 }
 
 func NewHubSession(handlerAddr string, secure bool) HubSession {
