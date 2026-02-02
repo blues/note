@@ -7,34 +7,22 @@ package notelib
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/blues/note-go/note"
 	"github.com/blues/note-go/notecard"
+	golc "github.com/google/open-location-code/go"
 )
 
 // Request performs a local operation using the JSON API
-func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpointID string, reqJSON []byte) (rspJSON []byte) {
+func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpointID string, req notecard.Request) (rsp notecard.Request) {
 	var err error
-	req := notecard.Request{}
-	rsp := notecard.Request{}
 
 	// Debug
 	if debugRequest {
+		reqJSON, _ := note.JSONMarshal(req)
 		logDebug(ctx, ">> %s", string(reqJSON))
-	}
-
-	// Unmarshal the incoming request
-	err = note.JSONUnmarshal(reqJSON, &req)
-	if err != nil {
-		rsp.Err = fmt.Sprintf("unknown request: %s", err)
-		rspJSON, _ = note.JSONMarshal(rsp)
-		if debugRequest {
-			logDebug(ctx, "<< %s", string(rspJSON))
-		}
-		return
 	}
 
 	// Extract the request ID, which will be used to correlate requests with responses
@@ -92,13 +80,29 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 			rsp.Err = "reserved notefile name"
 			break
 		}
-		if !box.NotefileExists(req.NotefileID) {
+
+		exists := box.NotefileExists(req.NotefileID)
+		if !exists {
 			err = box.AddNotefile(ctx, req.NotefileID, nil)
 			if err != nil {
 				rsp.Err = fmt.Sprintf("%s", err)
 				break
 			}
 		}
+
+		if exists && req.NoteID == "-" {
+			// without a note ID (or just a dash) that means we should just create the notefile and return an error if it already exists
+			// this is used by the Notefile Explorer UI to return an error if it is already created
+			rsp.Err = fmt.Sprintf("notefile %s already exists %s", req.NotefileID, note.ErrNotefileExists)
+			break
+		}
+
+		// no body or payload specified, return after creating the notefile
+		emptyBodyAndPayload := (req.Payload == nil || len(*req.Payload) == 0) && (req.Body == nil || len(*req.Body) == 0)
+		if emptyBodyAndPayload {
+			break
+		}
+
 		// Check the noteID
 		isQueue, toHub, fromHub, _, _, _ := NotefileAttributesFromID(req.NotefileID)
 		if req.NoteID == "" {
@@ -130,6 +134,7 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 				openfile.Close(ctx)
 			}
 		}
+
 		// Add the note
 		xnote := note.Note{}
 		annotateNoteWithWhereWhen(&xnote, req)
@@ -142,6 +147,7 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 		if !req.Allow {
 			err = box.checkAddNoteLimits(ctx, req.NotefileID, xnote)
 		}
+
 		if err == nil {
 			err = box.AddNoteWithHistory(ctx, ei, endpointID, req.NotefileID, req.NoteID, xnote)
 		}
@@ -250,34 +256,36 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 				break
 			}
 		}
+		openfile, file, err2 := box.OpenNotefile(ctx, req.NotefileID)
+		if err2 != nil {
+			rsp.Err = fmt.Sprintf("%s", err2)
+			break
+		}
 		// Handle queues by getting the LRU note.  Note that we allow either inbound
 		// or outbound queues to be accessed this way via API, explicitly to allow
 		// the API to be used to manage queues in either direction.
 		if isQueue && req.NoteID == "" {
-			openfile, file, err2 := box.OpenNotefile(ctx, req.NotefileID)
-			if err2 != nil {
-				rsp.Err = fmt.Sprintf("%s", err2)
-				break
-			}
 			req.NoteID, err = file.GetLeastRecentNoteID()
 			if err != nil {
-				openfile.Close(ctx)
 				rsp.Err = fmt.Sprintf("%s", err)
+				openfile.Close(ctx)
 				break
 			}
 			openfile.Close(ctx)
 		}
 		// Get the note
 		var xnote note.Note
-		xnote, err = box.GetNote(ctx, req.NotefileID, req.NoteID)
+		xnote, err = file.GetNote(req.NoteID)
 		if err != nil {
 			rsp.Err = fmt.Sprintf("error getting note: %s", err)
+			openfile.Close(ctx)
 			break
 		}
 		rsp.NoteID = req.NoteID
 		if !isQueue && xnote.Deleted {
 			if !req.Deleted {
 				rsp.Err = fmt.Sprintf("note has been deleted: %s "+note.ErrNoteNoExist, req.NoteID)
+				openfile.Close(ctx)
 				break
 			}
 			rsp.Deleted = true
@@ -289,18 +297,16 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 			payload := xnote.GetPayload()
 			rsp.Payload = &payload
 		}
-		if xnote.Histories != nil && len(*xnote.Histories) > 0 {
-			histories := *xnote.Histories
-
-			if histories[0].When < 1483228800 || histories[0].When > math.MaxUint32 { // before 1/1/2017 or can't fit into a uint32
-				rsp.Time = 0
-			} else {
-				rsp.Time = histories[0].When
-			}
+		rsp.Time = xnote.When()
+		rsp.Latitude, rsp.Longitude, rsp.LocationTime = Where(xnote)
+		if req.Edge {
+			rsp.Pending = file.ChangePendingForEndpoint(note.DefaultDeviceEndpointID, xnote)
+			rsp.Edge = xnote.GetEndpointID() == note.DefaultDeviceEndpointID
 		}
 		if req.Delete {
 			_ = box.DeleteNote(ctx, ei, endpointID, req.NotefileID, req.NoteID)
 		}
+		openfile.Close(ctx)
 
 	case notecard.ReqFileGetL:
 		fallthrough
@@ -516,7 +522,8 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 		noteIDs := chgfile.NoteIDs(true)
 		infolist := map[string]note.Info{}
 		for i := range noteIDs {
-			xnote, err := chgfile.GetNote(noteIDs[i])
+			noteID := noteIDs[i]
+			xnote, err := chgfile.GetNote(noteID)
 			if err != nil {
 				if rsp.Err == "" {
 					rsp.Err = fmt.Sprintf("error opening note: %s", err)
@@ -537,9 +544,22 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 				info.Payload = &payload
 			}
 			info.When = xnote.When()
+			info.WhereLat, info.WhereLon, info.WhereWhen = Where(xnote)
+			if req.Edge || req.Pending {
+				// Need to use the original note, not the chgfile copy, to get this info accurately
+				onote, err := file.GetNote(noteID)
+				if err == nil {
+					if req.Pending {
+						info.Pending = file.ChangePendingForEndpoint(note.DefaultDeviceEndpointID, onote)
+					}
+					if req.Edge {
+						info.Edge = onote.GetEndpointID() == note.DefaultDeviceEndpointID
+					}
+				}
+			}
 
 			// Add it to the list to be returned
-			infolist[noteIDs[i]] = info
+			infolist[noteID] = info
 
 			// Delete it as a side-effect, if desired
 			if req.Delete {
@@ -560,14 +580,9 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 
 	}
 
-	// Marshal a response
-	rspJSON, _ = note.JSONMarshal(rsp)
-
-	// Append a \n so that the requester can recognize end-of-response
-	rspJSON = []byte(string(rspJSON) + "\n")
-
 	// Debug
 	if debugRequest {
+		rspJSON, _ := note.JSONMarshal(rsp)
 		logDebug(ctx, "<< %s", string(rspJSON))
 	}
 
@@ -587,7 +602,11 @@ func annotateNoteWithWhereWhen(xnote *note.Note, req notecard.Request) {
 		}
 		newHistory := note.History{}
 		newHistory.When = req.Time
-		newHistory.Where = req.LocationOLC
+		if req.LocationOLC != "" {
+			newHistory.Where = req.LocationOLC
+		} else if req.Latitude != 0 || req.Longitude != 0 {
+			newHistory.Where = golc.Encode(req.Latitude, req.Longitude, 12)
+		}
 		newHistory.WhereWhen = req.LocationTime
 		newHistories := []note.History{}
 		newHistories = append(newHistories, newHistory)

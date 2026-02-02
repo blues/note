@@ -1369,6 +1369,7 @@ func extractSessionTowerLocationContext(req *notehubMessage, session *HubSession
 	if req.CellID != "" {
 		var mcc, mnc, lac, cellid, rssi, sinr, rsrp, rsrq, bearer, bars int
 		var rat, str1, str2, ip string
+		var elevation float64
 		s := strings.Split(req.CellID, ",")
 		if len(s) > 0 {
 			mcc, _ = strconv.Atoi(s[0])
@@ -1412,6 +1413,9 @@ func extractSessionTowerLocationContext(req *notehubMessage, session *HubSession
 		if len(s) > 13 {
 			ip = s[13]
 		}
+		if len(s) > 14 {
+			elevation, _ = strconv.ParseFloat(s[14], 64)
+		}
 
 		// Check if cell tower has changed
 		var newCellID string
@@ -1433,6 +1437,7 @@ func extractSessionTowerLocationContext(req *notehubMessage, session *HubSession
 		session.Session.Rat = rat
 		session.Session.Bars = bars
 		session.Session.Ip = ip
+		session.Session.Elevation = elevation
 		if bearer == notecard.NetworkBearerWLan {
 			session.Session.Bssid = str1
 			session.Session.Ssid = str2

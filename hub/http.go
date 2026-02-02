@@ -37,6 +37,7 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 	reqJSON, err = io.ReadAll(httpReq.Body)
 	if err != nil {
 		err = fmt.Errorf("please supply a JSON request in the HTTP body")
+		httpRsp.WriteHeader(http.StatusBadRequest)
 		httpRsp.Write(notelib.ErrorResponse(err))
 		return
 	}
@@ -60,34 +61,49 @@ func httpReqHandler(httpRsp http.ResponseWriter, httpReq *http.Request) {
 	// Look up the device
 	var device DeviceState
 	device, err = deviceGet(deviceUID)
+	if err != nil {
+		httpRsp.WriteHeader(http.StatusNotFound)
+		httpRsp.Write(notelib.ErrorResponse(err))
+		return
+	}
 
 	// Get the hub endpoint ID and storage object
-	var hubEndpointID, deviceStorageObject string
-	if err == nil {
-		hubEndpointID, _, deviceStorageObject, err = notelib.HubDiscover(deviceUID, "", device.ProductUID, appUID)
+	hubEndpointID, _, deviceStorageObject, err := notelib.HubDiscover(deviceUID, "", device.ProductUID, appUID)
+	if err != nil {
+		// This shouldn't normally happen since we already verified the device above
+		httpRsp.WriteHeader(http.StatusInternalServerError)
+		httpRsp.Write(notelib.ErrorResponse(err))
+		return
 	}
 
 	// Process the request
-	var rspJSON []byte
-	if err == nil {
-		var box *notelib.Notebox
-		box, err = notelib.OpenEndpointNotebox(ctx, hubEndpointID, deviceStorageObject, false)
-		if err == nil {
-			ei := notelib.EventInfo(deviceUID, device.DeviceSN, device.ProductUID, appUID, "api:http", notehubEvent, nil)
-			rspJSON = box.Request(ctx, ei, hubEndpointID, reqJSON)
-			box.Close(ctx)
-		}
+	var box *notelib.Notebox
+	box, err = notelib.OpenEndpointNotebox(ctx, hubEndpointID, deviceStorageObject, false)
+	if err != nil {
+		// This shouldn't normally happen since we already verified the device above
+		httpRsp.WriteHeader(http.StatusInternalServerError)
+		httpRsp.Write(notelib.ErrorResponse(err))
+		return
 	}
 
-	// Handle errors
-	if err != nil {
-		rspJSON = notelib.ErrorResponse(err)
+	ei := notelib.EventInfo(deviceUID, device.DeviceSN, device.ProductUID, appUID, "api:http", notehubEvent, nil)
+	rsp := box.Request(ctx, ei, hubEndpointID, req.Request)
+	box.Close(ctx)
+
+	rspJSON, _ := note.JSONMarshal(rsp)
+	// Append a \n so that the requester can recognize end-of-response
+	rspJSON = []byte(string(rspJSON) + "\n")
+
+	httpStatus := http.StatusOK
+	if rsp.Err != "" {
+		httpStatus = note.ErrorHttpStatus(rsp.Err)
 	}
 
 	// Debug
 	fmt.Printf("http rsp: %s\n", string(rspJSON))
 
 	// Write the response
+	httpRsp.WriteHeader(httpStatus)
 	httpRsp.Write(rspJSON)
 }
 

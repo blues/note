@@ -70,8 +70,19 @@ func HubSetReadFile(fn ReadFileFunc) {
 	fnHubReadFile = fn
 }
 
-// WebRequestFunc performs a web request on behalf of a device
-type WebRequestFunc func(ctx context.Context, sess *HubSession, deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqoffset int, reqmaxbytes int, target string, reqwhen int64, bodyJSON []byte, payload []byte) (rspstatuscode int, rspheader map[string][]string, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
+// WebRequestFunc performs a web request on behalf of a device.
+//
+// Parameters:
+//   - reqoffset: byte offset for partial GET requests (used with reqRspMaxBytes for Range header)
+//   - reqTotalPayloadLen: total expected length of request payload for segmented uploads (0 if not segmented)
+//   - reqRspMaxBytes: maximum response size to return to device
+//   - payload: current segment of request payload (complete payload if reqTotalPayloadLen is 0)
+//   - reqLabel: label/filename for multipart uploads
+//
+// For segmented uploads (reqTotalPayloadLen > 0), the callback is invoked for each segment.
+// The callback should accumulate segments and return http.StatusContinue until the full
+// payload is received, then process the complete request.
+type WebRequestFunc func(ctx context.Context, sess *HubSession, deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqoffset int, reqTotalPayloadLen int, reqRspMaxBytes int, target string, reqLabel string, reqwhen int64, bodyJSON []byte, payload []byte) (rspstatuscode int, rspheader map[string][]string, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
 
 var fnHubWebRequest WebRequestFunc
 
@@ -353,7 +364,9 @@ func processRequest(ctx context.Context, session *HubSession, req notehubMessage
 		// This is a nil transaction
 
 	case msgPing:
-		rsp.HubTimeNs = time.Now().UnixNano()
+		if notecardTimeNeedsCalibration(session) {
+			rsp.HubTimeNs = time.Now().UnixNano()
+		}
 
 	case msgPingLegacy:
 		// This is a nil transaction
@@ -502,6 +515,7 @@ func sawNotefile(session *HubSession, box *Notebox, notefileID string) {
 // MaxChanges on the response is the HTTP status code
 // Since has the time of the request (if not present because old firmware, the time of the special "web" note is used)
 // Until is the crc16 of the binary template encoded in this transaction
+// DeviceOrderingCode is the label to be used
 func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
 	if fnHubWebRequest == nil {
 		return fmt.Errorf("no web request handler has been set " + note.ErrHubNoHandler)
@@ -520,6 +534,7 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 	reqcontent := req.MotionOrientation
 	reqmaxbytes := int(req.MotionSecs)
 	target := req.NotefileIDs
+	label := req.DeviceOrderingCode
 	totalPayloadLen := int(req.HighPowerSecsTotal)
 	payloadOffset := int(req.HighPowerSecsData)
 
@@ -565,12 +580,11 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 		snote.Payload = req.GetPayload()
 	}
 
-	// If there is no payload, use "offset" for byte range operations (along with "max" for length)
-	reqoffset := int(0)
-	if len(snote.Payload) == 0 {
-		reqoffset = int(payloadOffset)
-		payloadOffset = 0
-	}
+	// The payloadOffset field serves dual purpose:
+	// - For GET requests without payload: byte offset for HTTP Range header
+	// - For POST requests with segmented payload: offset where this segment starts
+	// The callback can distinguish these cases using totalPayloadLen (0 = not segmented).
+	reqoffset := payloadOffset
 
 	// Decompress the payload if requested to do so.  Note that we tunnel this indication through
 	// the SessionIDMismatch flag which was a convenient bool in the protobuf.
@@ -583,97 +597,23 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 		}
 	}
 
-	// If an MD5 field is present, verify the payload's consistency
+	// If an MD5 field is present, verify this segment's integrity
 	if len(snote.Payload) > 0 && req.SessionTrigger != "" {
 		if !strings.EqualFold(req.SessionTrigger, fmt.Sprintf("%x", md5.Sum(snote.Payload))) {
 			return fmt.Errorf("payload was corrupted on the network in transit from notecard to notehub " + note.ErrWebPayload)
 		}
 	}
 
-	// A segmented payload upload request is indicated by totalPayloadLen being specified
-	if totalPayloadLen == 0 {
-
-		// We're not requesting a segmented upload, so clear any pending retained payload
-		session.PendingWebPayload = []byte{}
-
-	} else {
-
-		// For robustness in segmented payload processing, we follow these strict rules:
-		// 1. Allow a 0 length writes as a way just to truncate lengths and proceed with a pending upload
-		// 2. If someone tries to upload more than the totalPayloadLen, FIX the indicated totalPayloadLen
-		//    just to be forgiving to the developer
-		// 3. If there would be a gap in the uploaded data becase offset is > pending length, it's an error
-		// 4. If the offset is <= pending length, just truncate it because we may simply be retrying an upload
-		// 5. If the pending length is > an updated totalPayloadLen, just truncate pending length and proceed
-		//    because this is a valid way to 'terminate' a segmented payload upload being appended-to
-
-		// (2) above
-		if payloadOffset+len(snote.Payload) > totalPayloadLen {
-			totalPayloadLen = payloadOffset + len(snote.Payload)
-		}
-
-		// Enforce the maximum amount we allow for segmented payloads.  Note that there's nothing
-		// special about this number except to keep memory usage in check.  If a customer needs more,
-		// within reason, we could certainly consider it and update this number as it really is
-		// just temporary storage that should be freed pretty quickly in practice.
-		maxPayloadLen := 10000000
-		if totalPayloadLen > maxPayloadLen {
-			session.PendingWebPayload = []byte{}
-			return fmt.Errorf("segmented payloads are limited to %d bytes (%d requested) ", maxPayloadLen, totalPayloadLen)
-		}
-
-		// (3) above (making sure we only do this iff we actually uploaded data to be appended)
-		if len(snote.Payload) > 0 && payloadOffset > len(session.PendingWebPayload) {
-			return fmt.Errorf("segmented payloads must be uploaded without gaps (%d already uploaded but offset is %d) "+note.ErrWebPayload, len(session.PendingWebPayload), payloadOffset)
-		}
-
-		// (4) above (making sure we only do this iff we actually uploaded data to be appended)
-		if len(snote.Payload) > 0 && payloadOffset < len(session.PendingWebPayload) {
-			session.PendingWebPayload = session.PendingWebPayload[:payloadOffset]
-		}
-
-		// (5) above
-		if len(session.PendingWebPayload) > totalPayloadLen {
-			session.PendingWebPayload = session.PendingWebPayload[:totalPayloadLen]
-		}
-
-		// Append this chunk to the pending web payload
-		session.PendingWebPayload = append(session.PendingWebPayload, snote.Payload...)
-
-		// If we still haven't received the entire payload, just return with no error and no response
-		if len(session.PendingWebPayload) < totalPayloadLen {
-			rsp.MaxChanges = http.StatusContinue
-			notefile = CreateNotefile(false)
-			snote, _ = note.CreateNote(nil, nil)
-			_, err = notefile.AddNote(ctx, nil, req.DeviceEndpointID, specialNoteID, snote)
-			if err != nil {
-				err = fmt.Errorf("addNote error when pending payload: %w", err)
-				return
-			}
-			err = rsp.SetNotefile(notefile)
-			if err != nil {
-				err = fmt.Errorf("setNotefile error when pending payload: %w", err)
-				return
-			}
-			return
-		}
-
-		// We've completed assembling the payload, so proceed with the web request
-		snote.Payload = session.PendingWebPayload
-		session.PendingWebPayload = []byte{}
-
-	}
-
 	// If there's a template, transfer the payload to a special "decoded" body subfield
 	if payloadTemplateCrc16 != 0 {
-		bulkContext, err := BulkDecodeTemplate(session.BinTemplateJSON, snote.Payload)
+		bulkContext, err := BulkDecodeTemplate(ctx, session.BinTemplateJSON, snote.Payload)
 		if err != nil {
 			return err
 		}
 		events := []note.Event{}
 		timerName := timerBegin(ctx, "bulkDecode")
 		for {
-			body, payload, when, wherewhen, olc, _, success := bulkContext.BulkDecodeNextEntry()
+			body, payload, when, wherewhen, olc, _, success := bulkContext.BulkDecodeNextEntry(ctx)
 			if !success {
 				break
 			}
@@ -704,7 +644,7 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 	// Process web requests asynchronously if desired
 	if req.SuppressResponse {
 		go func() {
-			_, _, _, _, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, reqwhen, snote.GetBody(), snote.Payload)
+			_, _, _, _, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, totalPayloadLen, reqmaxbytes, target, label, reqwhen, snote.GetBody(), snote.Payload)
 			if err != nil {
 				logInfo(ctx, "error during async web request: %s", err)
 			}
@@ -715,10 +655,28 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 	// Perform the web request.  If an error occurs, place the result in rsp.Error but
 	// continue processing the transaction.
 	timerName := timerBegin(ctx, "webRequest")
-	statuscode, rspHeader, rspBodyJSON, rspPayload, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, reqmaxbytes, target, reqwhen, snote.GetBody(), snote.Payload)
+	statuscode, rspHeader, rspBodyJSON, rspPayload, err := fnHubWebRequest(ctx, session, req.DeviceUID, req.ProductUID, alias, reqtype, reqcontent, reqoffset, totalPayloadLen, reqmaxbytes, target, label, reqwhen, snote.GetBody(), snote.Payload)
 	timerEnd(ctx, timerName)
 	if err != nil {
 		rsp.Error = TruncateErrorString(err.Error(), maxProtobufStringLength)
+	}
+
+	// If the callback returns StatusContinue, it means more segments are needed for a
+	// segmented upload. Return an empty response with the continue status code so the
+	// device knows to send the next segment.
+	if statuscode == http.StatusContinue {
+		rsp.MaxChanges = http.StatusContinue
+		notefile = CreateNotefile(false)
+		snote, _ = note.CreateNote(nil, nil)
+		_, err = notefile.AddNote(ctx, nil, req.DeviceEndpointID, specialNoteID, snote)
+		if err != nil {
+			return fmt.Errorf("addNote error when pending payload: %w", err)
+		}
+		err = rsp.SetNotefile(notefile)
+		if err != nil {
+			return fmt.Errorf("setNotefile error when pending payload: %w", err)
+		}
+		return nil
 	}
 
 	// If there's a payload, return its MD5 to the caller so the device can check for corruption
@@ -1223,6 +1181,11 @@ func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMess
 	// Done
 	box.Close(ctx)
 
+	// Every 12 hours, return the hub time to the device for its own clock calibration
+	if notecardTimeNeedsCalibration(session) {
+		rsp.HubTimeNs = time.Now().UnixNano()
+	}
+
 	return err
 }
 
@@ -1272,11 +1235,11 @@ func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMes
 		binTemplateJSON := body
 		body = []byte{}
 		var bulkContext BulkTemplateContext
-		bulkContext, err = BulkDecodeTemplate(binTemplateJSON, payload)
+		bulkContext, err = BulkDecodeTemplate(ctx, binTemplateJSON, payload)
 		if err == nil {
 			events := []note.Event{}
 			for {
-				noteBody, notePayload, when, wherewhen, olc, _, success := bulkContext.BulkDecodeNextEntry()
+				noteBody, notePayload, when, wherewhen, olc, _, success := bulkContext.BulkDecodeNextEntry(ctx)
 				if !success {
 					break
 				}
@@ -1586,6 +1549,19 @@ func msgTypeName(msgType string) string {
 		return "HubSocketSend"
 	}
 	return "(" + msgType + ")"
+}
+
+// notecardTimeNeedsCalibration checks if it's time to send the hub time to the
+// notecarrd for its clock calibration. It returns true periodically and updates
+// the session's LastCalibratedNotecardTime field when it does so.
+func notecardTimeNeedsCalibration(session *HubSession) bool {
+	const calibrationIntervalSecs = 12 * 60 * 60 // 12 hours
+	now := time.Now().Unix()
+	if now-session.LastCalibratedNotecardTime >= calibrationIntervalSecs {
+		session.LastCalibratedNotecardTime = now
+		return true
+	}
+	return false
 }
 
 // Truncate an error string, moving errors to the front if it's too long

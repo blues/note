@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/blues/note-go/note"
-	olc "github.com/google/open-location-code/go"
+	golc "github.com/google/open-location-code/go"
 )
 
 // Debug
@@ -64,6 +64,9 @@ type Tracker struct {
 
 // defaultMaxGetChangesBatchSize is the default for the max of changes that we'll return in a batch of GetChanges.
 const defaultMaxGetChangesBatchSize = 25
+
+// The maximum allowed amount of notes to be added to a notefile before they are rejected
+const MaxNotes = 100
 
 // inboundQueuesProcessedByNotifier defines whether or not the local behavior
 // is that queues are processed by the notifier, or if they
@@ -293,24 +296,15 @@ func (nf *Notefile) event(ctx context.Context, ei *NotefileEventInfo, local bool
 		histories := *xnote.Histories
 		event.When = histories[0].When
 		event.Where = histories[0].Where
-		event.WhereWhen = histories[0].WhereWhen
-		if event.Where != "" {
-			area, err := olc.Decode(event.Where)
-			if err == nil {
-				event.WhereLat, event.WhereLon = area.Center()
-			}
-		}
+		event.WhereLat, event.WhereLon, event.WhereWhen = OlcToLatLon(histories[0].Where, histories[0].WhereWhen)
 	}
 	if xnote.Tower != nil {
-		if xnote.Tower.OLC != "" {
-			area, err := olc.Decode(event.Where)
-			if err == nil {
-				xnote.Tower.Lat, xnote.Tower.Lon = area.Center()
-			}
-		}
 		event.TowerLat = xnote.Tower.Lat
 		event.TowerLon = xnote.Tower.Lon
 		event.TowerWhen = xnote.Tower.When
+		if xnote.Tower.OLC != "" {
+			event.TowerLat, event.TowerLon, event.TowerWhen = OlcToLatLon(xnote.Tower.OLC, xnote.Tower.When)
+		}
 		event.TowerCountry = xnote.Tower.CountryCode
 		event.TowerLocation = xnote.Tower.Name
 		event.TowerTimeZone = xnote.Tower.TimeZone
@@ -867,6 +861,32 @@ func (nf *Notefile) swapTrackerSessionID(trackerID string, newSessionID int64) (
 	return
 }
 
+// ChangePendingForEndpoint determines whether or not a given note is pending to be synced
+// for the specified endpoint
+func (nf *Notefile) ChangePendingForEndpoint(trackerID string, xnote note.Note) (pendingChange bool) {
+	// Get the tracker info
+	nf.lock.RLock()
+	tracker, present := nf.Trackers[trackerID]
+	nf.lock.RUnlock()
+	// No tracker yet?
+	if !present {
+		return true
+	}
+	// Tracker was reinitialized to force full sync?
+	if tracker.Change <= 1 {
+		return true
+	}
+	// Change hasn't yet been seen by the endpoint?
+	if tracker.Change <= xnote.Change {
+		// Change originated at the specified endpoint?  Ignore it.
+		if !changeShouldBeIgnored(&xnote, trackerID) {
+			return true
+		}
+	}
+	// Not a pending change
+	return false
+}
+
 // AreChanges determines whether or not there are any changes pending for this endpoint
 func (nf *Notefile) AreChanges(trackerID string) (areChanges bool, err error) {
 	// Get the tracker info
@@ -1258,6 +1278,7 @@ func (nf *Notefile) InternalizePayload(xp []byte) (err error) {
 			continue
 		}
 		if note.XPOff+note.XPLen > xpLen {
+			// Not sure if the can be caused by a customer or if it's only internal corruption. For now, this will be reported with an InternalServerError status.
 			err = fmt.Errorf("payload outside %d xp bounds: offset %d len %d", xpLen, note.XPOff, note.XPLen)
 			break
 		}
@@ -1354,4 +1375,27 @@ func (nf *Notefile) ConvertToJSON(indent bool) (output []byte, err error) {
 	output, err = nf.uConvertToJSON(indent)
 	nf.lock.RUnlock()
 	return
+}
+
+// Decode an OLC
+func OlcToLatLon(where string, wherewhen int64) (lat float64, lon float64, ltime int64) {
+	area, err := golc.Decode(where)
+	if err == nil {
+		lat, lon = area.Center()
+		ltime = wherewhen
+	}
+	return
+}
+
+// GetWhere retrieves the location from a note.  The reason this is not in note-go is so that
+// we don't need to add the golc dependency to that package.  This can always be moved if desired.
+func Where(note note.Note) (lat float64, lon float64, wherewhen int64) {
+	if note.Histories == nil || len(*note.Histories) == 0 {
+		return 0.0, 0.0, 0
+	}
+	h := (*note.Histories)[0]
+	if h.Where == "" {
+		return 0.0, 0.0, 0
+	}
+	return OlcToLatLon(h.Where, h.WhereWhen)
 }
