@@ -1208,11 +1208,11 @@ func WireBarsFromSession(session *note.DeviceSession) (rat string, bars uint32) 
 	rat = session.Rat
 
 	// If there's no coverage indication at all, we can't do the math and so we have no bars
-	if session.Rsrq == 0 && session.Rsrp == 0 && session.Sinr == 0 {
+	if session.Rsrq == 0 && session.Rsrp == 0 && session.Sinr == 0 && session.Rssi == 0 {
 		return
 	}
 
-	// Start by assuming no coverage
+	// Start by assuming best coverage
 	bars = 4
 
 	// Handle GSM OR handle LTE at the state when RSRQ can't be computed
@@ -1241,7 +1241,7 @@ func WireBarsFromSession(session *note.DeviceSession) (rat string, bars uint32) 
 	}
 	// SINR is an integer indicating the signal to interference plus noise ratio.
 	// The logarithmic values (0-250) are in 1/5th of a dB, ranging from -20 to +30db
-	sinr := -20 + (session.Sinr * 5)
+	sinr := -20 + (session.Sinr / 5)
 	if sinr < 20 {
 		bars = u32min(bars, 3)
 	}
