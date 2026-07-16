@@ -2,10 +2,33 @@ package notelib
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"testing"
+
+	"github.com/golang/snappy"
 )
+
+func TestSnappyDecodeLimited(t *testing.T) {
+	// Round-trips a normal block.
+	orig := []byte("the quick brown fox jumps over the lazy dog, compressibly")
+	got, err := snappyDecodeLimited(snappy.Encode(nil, orig))
+	if err != nil {
+		t.Fatalf("decode normal block: %v", err)
+	}
+	if string(got) != string(orig) {
+		t.Fatalf("round-trip mismatch: got %q want %q", got, orig)
+	}
+
+	// Rejects a block whose declared decoded length exceeds the limit, before
+	// allocating it (decompression-bomb guard).
+	var hdr [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(hdr[:], uint64(maxWirePayloadBytes)+1)
+	if _, err := snappyDecodeLimited(hdr[:n]); err == nil {
+		t.Fatal("expected error for over-limit declared length, got nil")
+	}
+}
 
 func TestMsgFromWire(t *testing.T) {
 
@@ -51,4 +74,34 @@ func TestMsgFromWire(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzMsgFromWire ensures the message wire-decode entry point never panics on
+// malformed or malicious input; an error is the expected outcome.
+func FuzzMsgFromWire(f *testing.F) {
+	f.Add([]byte(nil))
+	f.Add([]byte{0x00})
+	f.Add([]byte{0x01, 0x02, 0x03, 0x04, 0x05})
+	f.Add(make([]byte, 64))
+
+	f.Fuzz(func(t *testing.T, wire []byte) {
+		_, _, _ = msgFromWire(context.Background(), wire)
+	})
+}
+
+// FuzzPacketFromWire ensures the packet wire-decode entry point never panics on
+// malformed or malicious input; an error is the expected outcome.
+func FuzzPacketFromWire(f *testing.F) {
+	f.Add([]byte(nil))
+	f.Add([]byte{0x00})
+	f.Add([]byte{0x01, 0x02, 0x03, 0x04, 0x05})
+	f.Add(make([]byte, 64))
+
+	f.Fuzz(func(t *testing.T, wire []byte) {
+		h := &PacketHandler{}
+		h.Notecard.PacketDownlinkMtu = 1024
+		h.Notecard.EncrAlg = "chacha20-poly1305"
+		h.Notecard.EncrKey = make([]byte, 32)
+		_, _ = h.PacketFromWire(wire)
+	})
 }

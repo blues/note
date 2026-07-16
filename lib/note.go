@@ -144,6 +144,14 @@ func updateNote(xnote *note.Note, endpointID string, resolveConflicts bool, dele
 //	conflictDataDiffers is returned as true if they
 //	   are equal but their conflict data is different
 func compareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffers bool, result int) {
+	return compareModifiedDepth(xnote, incomingNote, 0)
+}
+
+func compareModifiedDepth(xnote note.Note, incomingNote note.Note, depth int) (conflictDataDiffers bool, result int) {
+	if depth > maxConflictDepth {
+		return true, -1
+	}
+
 	if incomingNote.Updates > xnote.Updates {
 		return false, -1
 	}
@@ -190,7 +198,7 @@ func compareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffe
 
 				for index2 := 0; index2 < len(incomingNoteConflicts); index2++ {
 					incomingConflictNote := incomingNoteConflicts[index2]
-					_, compareResult := compareModified(incomingConflictNote, localConflictNote)
+					_, compareResult := compareModifiedDepth(incomingConflictNote, localConflictNote, depth+1)
 					if compareResult == 0 {
 						matchingConflict = true
 						break
@@ -210,8 +218,20 @@ func compareModified(xnote note.Note, incomingNote note.Note) (conflictDataDiffe
 	return true, 0
 }
 
+// maxConflictDepth caps recursion when resolving conflict subsumption so a
+// pathologically deep conflict chain can't exhaust the stack.
+const maxConflictDepth = 1000
+
 // isSubsumedBy determines whether or not this Note was subsumed by changes to another
 func isSubsumedBy(xnote note.Note, incomingNote note.Note) bool {
+	return isSubsumedByDepth(xnote, incomingNote, 0)
+}
+
+func isSubsumedByDepth(xnote note.Note, incomingNote note.Note, depth int) bool {
+	if depth > maxConflictDepth {
+		return false
+	}
+
 	noteHistories := copyOrCreateNonblankHistory(xnote.Histories)
 	incomingNoteHistories := copyOrCreateNonblankHistory(incomingNote.Histories)
 	noteConflicts := copyOrCreateBlankConflict(xnote.Conflicts)
@@ -233,7 +253,7 @@ func isSubsumedBy(xnote note.Note, incomingNote note.Note) bool {
 	if !isSubsumed {
 		for index := 0; index < len(incomingNoteConflicts); index++ {
 			incomingConflict := incomingNoteConflicts[index]
-			if isSubsumedBy(xnote, incomingConflict) {
+			if isSubsumedByDepth(xnote, incomingConflict, depth+1) {
 				isSubsumed = true
 				break
 			}
@@ -248,14 +268,14 @@ func isSubsumedBy(xnote note.Note, incomingNote note.Note) bool {
 		isSubsumed = false
 
 		localConflict := noteConflicts[index]
-		if isSubsumedBy(localConflict, incomingNote) {
+		if isSubsumedByDepth(localConflict, incomingNote, depth+1) {
 			isSubsumed = true //nolint This is an ineffectual assignment, but it is here for clarity
 			break
 		}
 
 		for index2 := 0; index2 < len(incomingNoteConflicts); index2++ {
 			incomingConflict := incomingNoteConflicts[index2]
-			if isSubsumedBy(localConflict, incomingConflict) {
+			if isSubsumedByDepth(localConflict, incomingConflict, depth+1) {
 				isSubsumed = true
 				break
 			}

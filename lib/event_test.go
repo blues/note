@@ -61,3 +61,45 @@ func TestGenerateEventUid(t *testing.T) {
 	require.Equal(t, b, c)
 	require.Equal(t, "edd13f0c-b9b8-836c-8c1c-631230e21e56", b)
 }
+
+func TestGenerateEventUidWhenMsAndSensor(t *testing.T) {
+	// Legacy events (no SensorUID, no WhenMs) must keep their existing UID; adding the
+	// new fields to the hash must not churn UIDs for events that don't set them.
+	require.Equal(t, "33cdeccc-cebe-8032-9f1f-dbee7f5874cb",
+		GenerateEventUid(&note.Event{When: 1}))
+
+	// WhenMs is an epoch-millisecond timestamp and distinguishes events that
+	// share the same whole-second When.
+	base := note.Event{DeviceUID: "dev:1", When: 1, NotefileID: "f.qo"}
+	withMs := base
+	withMs.WhenMs = 1500
+	require.NotEqual(t, GenerateEventUid(&base), GenerateEventUid(&withMs))
+
+	// Same WhenMs is deterministic; a different WhenMs differs.
+	withMsSame := base
+	withMsSame.WhenMs = 1500
+	require.Equal(t, GenerateEventUid(&withMs), GenerateEventUid(&withMsSame))
+	withMsOther := base
+	withMsOther.WhenMs = 1600
+	require.NotEqual(t, GenerateEventUid(&withMs), GenerateEventUid(&withMsOther))
+
+	// SensorUID distinguishes sensors reporting through the same gateway device with the
+	// same captured time. Different SensorUID -> different UID; same -> deterministic.
+	s1 := note.Event{DeviceUID: "dev:1", When: 1, SensorUID: "san:1"}
+	s2 := note.Event{DeviceUID: "dev:1", When: 1, SensorUID: "foo:2"}
+	require.NotEqual(t, GenerateEventUid(&s1), GenerateEventUid(&s2))
+	require.Equal(t, GenerateEventUid(&s1),
+		GenerateEventUid(&note.Event{DeviceUID: "dev:1", When: 1, SensorUID: "san:1"}))
+
+	// DeviceUID and SensorUID must not ambiguously concatenate: ("dev:ab","") and
+	// ("dev:a","b") are different events and must hash to different UIDs.
+	require.NotEqual(t,
+		GenerateEventUid(&note.Event{DeviceUID: "dev:ab", When: 1}),
+		GenerateEventUid(&note.Event{DeviceUID: "dev:a", SensorUID: "b", When: 1}))
+
+	// WhenMs alone is a complete captured timestamp.
+	msOnly := note.Event{DeviceUID: "dev:1", WhenMs: 1500}
+	require.Equal(t, GenerateEventUid(&msOnly),
+		GenerateEventUid(&note.Event{DeviceUID: "dev:1", WhenMs: 1500}))
+	require.True(t, isValidUUID(GenerateEventUid(&msOnly)))
+}

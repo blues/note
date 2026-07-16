@@ -32,6 +32,59 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 	// can be removed after we ship because the compat was just until we distributed new notecard fw.
 	req.Req = strings.Replace(req.Req, "files.", "file.", -1)
 
+	// Pre-process var.set/var.get/var.delete as syntactic sugar over note.update/note.get/
+	// note.delete on the vars.db notefile, mirroring the notecard-side shim in reqnote.c.
+	// Each rewrites NotefileID (defaulting to vars.db), moves Name -> NoteID, and re-routes
+	// req.Req to the underlying note.* request.  var.set additionally packs the scalar
+	// (value/flag/text) and array (values) fields into a body map, preserving the same
+	// "skip zero values" semantics the notecard marshaler enforces -- a var.set carrying
+	// only text+value produces a body with only those keys, byte-equivalent to what a
+	// connected device would have stored.  var.get sets a flag so the post-switch epilogue
+	// can hoist body fields back to top-level rsp fields.
+	isVarGet := false
+	switch req.Req {
+	case notecard.ReqVarSet:
+		if req.NotefileID == "" {
+			req.NotefileID = note.HubDefaultVarNotefile
+		}
+		req.NoteID = req.Name
+		req.Name = ""
+		body := map[string]interface{}{}
+		if req.Text != "" {
+			body["text"] = req.Text
+			req.Text = ""
+		}
+		if req.Values != nil && len(*req.Values) > 0 {
+			body["values"] = *req.Values
+			req.Values = nil
+		}
+		if req.Flag {
+			body["flag"] = true
+			req.Flag = false
+		}
+		if req.Value != 0.0 {
+			body["value"] = req.Value
+			req.Value = 0.0
+		}
+		req.Body = &body
+		req.Req = notecard.ReqNoteUpdate
+	case notecard.ReqVarGet:
+		if req.NotefileID == "" {
+			req.NotefileID = note.HubDefaultVarNotefile
+		}
+		req.NoteID = req.Name
+		req.Name = ""
+		req.Req = notecard.ReqNoteGet
+		isVarGet = true
+	case notecard.ReqVarDelete:
+		if req.NotefileID == "" {
+			req.NotefileID = note.HubDefaultVarNotefile
+		}
+		req.NoteID = req.Name
+		req.Name = ""
+		req.Req = notecard.ReqNoteDelete
+	}
+
 	// Dispatch based on request type
 	switch req.Req {
 
@@ -45,6 +98,7 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 			rsp.Err = "no notefiles were specified"
 			break
 		}
+
 		for notefileID, notefileInfo := range *req.FileInfo {
 			if !NotefileIDIsReservedWithExceptions(notefileID) || req.Allow {
 				err = box.AddNotefile(ctx, notefileID, &notefileInfo)
@@ -88,19 +142,6 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 				rsp.Err = fmt.Sprintf("%s", err)
 				break
 			}
-		}
-
-		if exists && req.NoteID == "-" {
-			// without a note ID (or just a dash) that means we should just create the notefile and return an error if it already exists
-			// this is used by the Notefile Explorer UI to return an error if it is already created
-			rsp.Err = fmt.Sprintf("notefile %s already exists %s", req.NotefileID, note.ErrNotefileExists)
-			break
-		}
-
-		// no body or payload specified, return after creating the notefile
-		emptyBodyAndPayload := (req.Payload == nil || len(*req.Payload) == 0) && (req.Body == nil || len(*req.Body) == 0)
-		if emptyBodyAndPayload {
-			break
 		}
 
 		// Check the noteID
@@ -578,6 +619,47 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 		// Close the notefile
 		openfile.Close(ctx)
 
+	}
+
+	// Var.get post-processing: hoist body fields to top-level rsp fields and clear
+	// the note-shaped scaffolding (Body/NoteID/Time/Deleted), mirroring the
+	// notecard-side var.get epilogue in reqnote.c so the response shape matches
+	// what callers expect from a var.get rather than a note.get.
+	if isVarGet && rsp.Err == "" && rsp.Body != nil {
+		body := *rsp.Body
+		if v, ok := body["value"].(float64); ok {
+			rsp.Value = v
+		}
+		if v, ok := body["flag"].(bool); ok {
+			rsp.Flag = v
+		}
+		if v, ok := body["text"].(string); ok {
+			rsp.Text = v
+		}
+		// values may arrive either as []interface{} (after a JSON round-trip
+		// through note storage) or as []float64 (when the body never left
+		// in-memory form), so handle both shapes.
+		switch vals := body["values"].(type) {
+		case []float64:
+			if len(vals) > 0 {
+				cp := append([]float64(nil), vals...)
+				rsp.Values = &cp
+			}
+		case []interface{}:
+			floats := make([]float64, 0, len(vals))
+			for _, x := range vals {
+				if f, ok := x.(float64); ok {
+					floats = append(floats, f)
+				}
+			}
+			if len(floats) > 0 {
+				rsp.Values = &floats
+			}
+		}
+		rsp.Body = nil
+		rsp.NoteID = ""
+		rsp.Time = 0
+		rsp.Deleted = false
 	}
 
 	// Debug

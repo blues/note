@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,12 +32,15 @@ type DeviceState struct {
 
 // Simulation of persistent device storage
 var (
+	deviceCacheMu          sync.Mutex
 	deviceCacheInitialized = false
 	deviceCache            map[string]DeviceState
 )
 
 // Simulate loading a specific device into the device cache
 func deviceCacheLoad(deviceUID string) (device DeviceState, present bool, err error) {
+	deviceCacheMu.Lock()
+	defer deviceCacheMu.Unlock()
 	// Initialize the device cache if not yet initialized
 	if !deviceCacheInitialized {
 		deviceCacheInitialized = true
@@ -87,7 +91,9 @@ func deviceGetOrProvision(deviceUID string, deviceSN string, productUID string) 
 	}
 
 	// Update the cached data structure
+	deviceCacheMu.Lock()
 	deviceCache[deviceUID] = device
+	deviceCacheMu.Unlock()
 
 	// We've successfully found or provisioned the device
 	return

@@ -29,6 +29,11 @@ import (
 // Automatic attempts to fix corrupt JSON enabled/disabled.  (See wire_test.go and hubreq.go for more information.)
 const fixCorruptJson = true
 
+// maxWirePayloadBytes caps a single decoded wire payload (the binary section of
+// an RPC, or data Snappy-decompressed from it) so malformed or compressed-bomb
+// input can't force an unbounded allocation.
+const maxWirePayloadBytes = 2 * 1024 * 1024
+
 // Available JSON compression formats.
 const (
 	jc0       = byte(0) // no compression
@@ -228,6 +233,20 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 	return
 }
 
+// snappyDecodeLimited decodes a Snappy block but rejects inputs whose declared
+// decoded length exceeds maxWirePayloadBytes, so a tiny payload can't force a
+// huge allocation.
+func snappyDecodeLimited(src []byte) ([]byte, error) {
+	dLen, err := snappy.DecodedLen(src)
+	if err != nil {
+		return nil, err
+	}
+	if dLen > maxWirePayloadBytes {
+		return nil, fmt.Errorf("snappy: decoded length %d exceeds limit %d", dLen, maxWirePayloadBytes)
+	}
+	return snappy.Decode(nil, src)
+}
+
 // Decompress a byte array known to contain JSON.  Note that we support 08 as of 11/01/2020.
 func jsonDecompress(compressed []byte) (normal []byte, err error) {
 	return jsonDecompressTrace(compressed, false)
@@ -303,7 +322,7 @@ func jsonDecompressTrace(compressed []byte, trace bool) (normal []byte, err erro
 		}
 
 		// Snappy decompress
-		sdecompressed, err = snappy.Decode(nil, compressed)
+		sdecompressed, err = snappyDecodeLimited(compressed)
 		if err != nil {
 			if trace {
 				fmt.Printf("  ERROR in Snappy decode: %v\n", err)
@@ -1186,8 +1205,8 @@ func wireReadHeaderTrace(version byte, header []byte, trace bool) (protobufLengt
 	// possibly be larger than the memory of the microcontroller.  Since
 	// as of 2022 we currently restrict our firmware to use 512KB of SRAM,
 	// a 2MB check should be quite reasonable.
-	if binaryLength < 0 || binaryLength > 2*1024*1024 {
-		err = fmt.Errorf("wire: binaryLength out of range %d", protobufLength)
+	if binaryLength < 0 || binaryLength > maxWirePayloadBytes {
+		err = fmt.Errorf("wire: binaryLength out of range %d", binaryLength)
 		return
 	}
 
@@ -1207,12 +1226,17 @@ func WireBarsFromSession(session *note.DeviceSession) (rat string, bars uint32) 
 	// Return the rat for the session
 	rat = session.Rat
 
+	if session.Bars != 0 {
+		// Return the bar calculation from the Notecard if it's already present.
+		return rat, uint32(session.Bars)
+	}
+
 	// If there's no coverage indication at all, we can't do the math and so we have no bars
-	if session.Rsrq == 0 && session.Rsrp == 0 && session.Sinr == 0 {
+	if session.Rsrq == 0 && session.Rsrp == 0 && session.Sinr == 0 && session.Rssi == 0 {
 		return
 	}
 
-	// Start by assuming no coverage
+	// Start by assuming best coverage
 	bars = 4
 
 	// Handle GSM OR handle LTE at the state when RSRQ can't be computed
@@ -1240,15 +1264,19 @@ func WireBarsFromSession(session *note.DeviceSession) (rat string, bars uint32) 
 		bars = u32min(bars, 1)
 	}
 	// SINR is an integer indicating the signal to interference plus noise ratio.
-	// The logarithmic values (0-250) are in 1/5th of a dB, ranging from -20 to +30db
-	sinr := -20 + (session.Sinr * 5)
-	if sinr < 20 {
+	// The range is from -20 to +30db
+	// Note that some older devices (running firmware prior to 15323 or 3.5.2) did not scale SINR properly and
+	// returned the raw Quectel modem value in the range 0 to 250. We explored adding a firmware check here
+	// and correcting Sinr (sinr := -20 + session.Sinr / 5). However, that added code complexity (to pass down
+	// the device object) and may not have worked for sessions created when the device was running earlier firmware.
+	// Given the age of the buggy f/w and that few if any customers are using it, we decided to leave the code as-is.
+	if session.Sinr < 20 {
 		bars = u32min(bars, 3)
 	}
-	if sinr < 13 {
+	if session.Sinr < 13 {
 		bars = u32min(bars, 2)
 	}
-	if sinr <= 0 {
+	if session.Sinr <= 0 {
 		bars = u32min(bars, 1)
 	}
 	// RSRQ is an integer indicating the reference signal received quality (RSRQ) in dB,
@@ -2362,7 +2390,7 @@ func (h *PacketHandler) PacketFromWire(wire []byte) (msg Packet, err error) {
 
 		// If the packet's data was compressed, decompress it
 		if len(msg.Data) > 0 && (packetFlags&PacketFlagCompressed) != 0 {
-			msg.Data, err = snappy.Decode(nil, msg.Data)
+			msg.Data, err = snappyDecodeLimited(msg.Data)
 			if err != nil {
 				return
 			}
@@ -2409,7 +2437,7 @@ func (h *PacketHandler) PacketFromWire(wire []byte) (msg Packet, err error) {
 	// If the packet's data was compressed, decompress it
 	if len(msg.Data) > 0 {
 		if (packetFlags & PacketFlagCompressed) != 0 {
-			msg.Data, err = snappy.Decode(nil, msg.Data)
+			msg.Data, err = snappyDecodeLimited(msg.Data)
 			if err != nil {
 				return
 			}

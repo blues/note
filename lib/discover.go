@@ -22,20 +22,6 @@ type DiscoverInfo struct {
 	HubCert                       []byte
 }
 
-// DiscoverFunc is the func to retrieve discovery info for this server
-type DiscoverFunc func(edgeUID string, deviceSN string, productUID string, appUID string, needHandlerInfo bool, hostname string, packetHandlerVersion string) (info DiscoverInfo, err error)
-
-var fnDiscover DiscoverFunc
-
-// HubSetDiscover sets the global discovery function
-func HubSetDiscover(fn DiscoverFunc) {
-	// Remember the discovery function
-	fnDiscover = fn
-
-	// Initialize debugging if we've not done so before
-	debugEnvInit()
-}
-
 // HubDiscover ensures that we've read the local server's discover info, and return the Hub's Endpoint ID
 func HubDiscover(deviceUID string, deviceSN string, productUID string, appUID string) (hubEndpointID string, retAppUID string, deviceStorageObject string, err error) {
 	if fnDiscover == nil {

@@ -365,11 +365,10 @@ func (nf *Notefile) event(ctx context.Context, ei *NotefileEventInfo, local bool
 			if ei.Session == nil {
 				typeMsg = typeMsg + " (no session)"
 			}
-			message := fmt.Sprintf("%s %s %s [timewarn] warning: %s enqueue took %s", ei.AppUID, ei.DeviceUID, nf.notefileID, typeMsg, duration)
 			if duration > transactionErrorDuration {
-				logWarn(ctx, "%s", message)
+				logWarn(ctx, "%s %s %s [timewarn] %s enqueue took %s", ei.AppUID, ei.DeviceUID, nf.notefileID, typeMsg, duration)
 			} else {
-				logInfo(ctx, "%s", message)
+				logDebug(ctx, "%s %s %s %s enqueue took %s", ei.AppUID, ei.DeviceUID, nf.notefileID, typeMsg, duration)
 			}
 		}
 		if err != nil {
@@ -959,7 +958,9 @@ func NotefileIDIsReservedWithExceptions(notefileID string) bool {
 		notefileID == note.HealthNotefile ||
 		notefileID == note.HealthHostNotefile ||
 		notefileID == note.NotecardRequestNotefile ||
-		notefileID == note.NotecardResponseNotefile {
+		notefileID == note.NotecardResponseNotefile ||
+		notefileID == note.TempNotefile ||
+		notefileID == note.FenceNotefile {
 		return false
 	}
 
@@ -1277,7 +1278,7 @@ func (nf *Notefile) InternalizePayload(xp []byte) (err error) {
 		if note.XPLen == 0 {
 			continue
 		}
-		if note.XPOff+note.XPLen > xpLen {
+		if note.XPOff > xpLen || note.XPLen > xpLen-note.XPOff {
 			// Not sure if the can be caused by a customer or if it's only internal corruption. For now, this will be reported with an InternalServerError status.
 			err = fmt.Errorf("payload outside %d xp bounds: offset %d len %d", xpLen, note.XPOff, note.XPLen)
 			break

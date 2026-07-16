@@ -26,7 +26,6 @@ import (
 
 	"github.com/blues/note-go/note"
 	"github.com/blues/note/jsonxt"
-	"github.com/golang/snappy"
 	golc "github.com/google/open-location-code/go"
 	"github.com/valyala/fastjson"
 )
@@ -150,7 +149,7 @@ func BulkDecodeTemplate(ctx context.Context, templateBodyJSON []byte, compressed
 		tmplContext.Bin = compressedPayload
 		tmplContext.BinLen = len(tmplContext.Bin)
 	} else if len(compressedPayload) > 0 {
-		tmplContext.Bin, err = snappy.Decode(nil, compressedPayload)
+		tmplContext.Bin, err = snappyDecodeLimited(compressedPayload)
 		tmplContext.BinLen = len(tmplContext.Bin)
 		if err != nil {
 			err = fmt.Errorf("bulk decode error '%s': template:%s payload:%v", err, string(templateBodyJSON), compressedPayload)
@@ -2038,13 +2037,21 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 		tmplContext.binArrayCountOffset = uint32(len(tmplContext.Bin))
 		tmplContext.binArrayAppendMode = true
 
-		// Check array length if da is an array
+		// Always reserve the uint16 count, even when the body omits this
+		// field or supplies an unexpected type — the decoder unconditionally
+		// reads a count here, so a missing count would skew the stream.
+		if err = tmplContext.binAppendUint16(ctx, 0); err != nil {
+			tmplContext.binArrayAppendMode = false
+			return
+		}
+
+		// Append elements if a body array of a recognized type was supplied.
 		switch dav := da.(type) {
 		case []interface{}:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2053,9 +2060,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []string:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2064,9 +2071,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []float32:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2075,9 +2082,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []float64:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2086,9 +2093,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []int:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2097,9 +2104,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []uint:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2108,9 +2115,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []int8:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2119,9 +2126,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []uint8:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2130,9 +2137,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []int16:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2141,9 +2148,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []uint16:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2152,9 +2159,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []int32:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2163,9 +2170,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []uint32:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2174,9 +2181,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []int64:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2185,9 +2192,9 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		case []uint64:
 			if len(dav) > int(tmplContext.MaxArrayLength) {
+				tmplContext.binArrayAppendMode = false
 				return fmt.Errorf("array length %d exceeds maximum of %d", len(dav), tmplContext.MaxArrayLength)
 			}
-			err = tmplContext.binAppendUint16(ctx, 0)
 			for i := 0; i < len(dav); i++ {
 				err = processArrayValue(ctx, tmplContext, level, i, a[0], dav)
 				if err != nil {
@@ -2196,6 +2203,7 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 			}
 		}
 
+		tmplContext.binArrayAppendMode = false
 		return
 	}
 

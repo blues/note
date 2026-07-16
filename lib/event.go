@@ -23,20 +23,35 @@ type EventFunc func(ctx context.Context, sess *HubSession, local bool, data *not
 // Generate a UUID for an event in a way that will allow detection of duplicates of "user data"
 func GenerateEventUid(event *note.Event) string {
 
-	// If the captured date is unknown, we can't make any assumptions about duplication
-	if event == nil || event.When == 0 {
+	// If the captured date is unknown, we can't make any assumptions about duplication.
+	if event == nil || (event.When == 0 && event.WhenMs == 0) {
 		return uuid.New().String()
 	}
 
 	// Create a new MD5 hash instance
 	var h = md5.New()
 
-	// Hash deviceUID so we don't conflict with another device in the app
+	// Hash deviceUID so we don't conflict with another device in the app, plus SensorUID
+	// so distinct sensors on one gateway don't collide. When SensorUID is present it is
+	// preceded by a NUL byte (which cannot appear in a UID string) so the two arbitrary-
+	// length IDs can't ambiguously concatenate, e.g. ("dev:ab","") vs ("dev:a","b"). An
+	// empty SensorUID writes nothing, so non-sensor events keep their existing UID.
 	h.Write([]byte(event.DeviceUID))
+	if event.SensorUID != "" {
+		h.Write([]byte{0})
+		h.Write([]byte(event.SensorUID))
+	}
 
-	// Convert the 'when' to a byte slice and hash it
+	// Hash the captured time. Legacy events without WhenMs keep hashing the
+	// whole-second When field exactly as before. WhenMs, when present, is the
+	// millisecond-accurate Unix epoch timestamp and is authoritative.
 	whenBytes := make([]byte, 8)
-	binary.LittleEndian.PutUint64(whenBytes, uint64(event.When))
+	if event.WhenMs != 0 {
+		h.Write([]byte{0})
+		binary.LittleEndian.PutUint64(whenBytes, uint64(event.WhenMs))
+	} else {
+		binary.LittleEndian.PutUint64(whenBytes, uint64(event.When))
+	}
 	h.Write(whenBytes)
 
 	// Hash notefileID and noteID
@@ -111,7 +126,7 @@ func marshalSortedJSON(jsonObject interface{}) []byte {
 			if i > 0 {
 				buffer.WriteString(",")
 			}
-			buffer.WriteString(fmt.Sprintf("\"%s\":%s", key, valueBytes))
+			fmt.Fprintf(&buffer, "\"%s\":%s", key, valueBytes)
 		}
 
 		buffer.WriteString("}")

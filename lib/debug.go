@@ -49,7 +49,7 @@ func debugEnvInit() {
 	if debugEnvInitialized {
 		return
 	}
-	// Initialzie from environment variables
+	// Initialize from environment variables
 	for i := range text {
 		avail, value := debugEnv(text[i])
 		if avail {

@@ -16,29 +16,20 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/blues/note-go/note"
 	"github.com/blues/note-go/notehub"
-	"github.com/golang/snappy"
 	golc "github.com/google/open-location-code/go"
 )
 
-// Flag indicating TLS support on this server
-var serverSupportsTLS bool
+// Flag indicating TLS support on this server. Read/written from
+// different goroutines, so use atomic access.
+var serverSupportsTLS atomic.Bool
 
 // Maximum field length in our protobufs if null were included in the cstring (see notehub.options)
 const maxProtobufStringLength = 253
-
-// NoteboxUpdateEnvFunc is the func to update environment variables for a device
-type NoteboxUpdateEnvFunc func(ctx context.Context, ei *NotefileEventInfo, box *Notebox, deviceUID string, appUID string, updateFeeds bool) (err error)
-
-var fnNoteboxUpdateEnv NoteboxUpdateEnvFunc
-
-// HubSetUpdateEnvironment sets the global notebox function to update env vars
-func HubSetUpdateEnvironment(ctx context.Context, fn NoteboxUpdateEnvFunc) {
-	fnNoteboxUpdateEnv = fn
-}
 
 // Update the environment variables for an open notebox
 func hubUpdateEnvVars(ctx context.Context, ei *NotefileEventInfo, box *Notebox, deviceUID string, appUID string, updateFeeds bool) {
@@ -48,57 +39,6 @@ func hubUpdateEnvVars(ctx context.Context, ei *NotefileEventInfo, box *Notebox, 
 			logDebug(ctx, "env: can't update env vars: %s", err)
 		}
 	}
-}
-
-// GetNotificationFunc retrieves hub notifications to be sent to client
-type GetNotificationFunc func(ctx context.Context, deviceEndpointID string, session *HubSession, eventFn EventFunc) (notifications []string)
-
-var fnHubNotifications GetNotificationFunc
-
-// HubSetDeviceNotifications sets the hub notification
-func HubSetDeviceNotifications(fn GetNotificationFunc) {
-	fnHubNotifications = fn
-}
-
-// ReadFileFunc is the func to read a byte range from the named file
-type ReadFileFunc func(ctx context.Context, appUID string, filetype notehub.UploadType, key string, offset int32, length int32, compress bool) (body notehub.UploadMetadata, payload []byte, err error)
-
-var fnHubReadFile ReadFileFunc
-
-// HubSetReadFile sets the read file func
-func HubSetReadFile(fn ReadFileFunc) {
-	fnHubReadFile = fn
-}
-
-// WebRequestFunc performs a web request on behalf of a device.
-//
-// Parameters:
-//   - reqoffset: byte offset for partial GET requests (used with reqRspMaxBytes for Range header)
-//   - reqTotalPayloadLen: total expected length of request payload for segmented uploads (0 if not segmented)
-//   - reqRspMaxBytes: maximum response size to return to device
-//   - payload: current segment of request payload (complete payload if reqTotalPayloadLen is 0)
-//   - reqLabel: label/filename for multipart uploads
-//
-// For segmented uploads (reqTotalPayloadLen > 0), the callback is invoked for each segment.
-// The callback should accumulate segments and return http.StatusContinue until the full
-// payload is received, then process the complete request.
-type WebRequestFunc func(ctx context.Context, sess *HubSession, deviceUID string, productUID string, alias string, reqtype string, reqcontent string, reqoffset int, reqTotalPayloadLen int, reqRspMaxBytes int, target string, reqLabel string, reqwhen int64, bodyJSON []byte, payload []byte) (rspstatuscode int, rspheader map[string][]string, rspBodyJSON []byte, rspPayloadJSON []byte, err error)
-
-var fnHubWebRequest WebRequestFunc
-
-// HubSetWebRequest sets the web request function
-func HubSetWebRequest(fn WebRequestFunc) {
-	fnHubWebRequest = fn
-}
-
-// SignalFunc performs a web request on behalf of a device
-type SignalFunc func(deviceUID string, bodyJSON []byte, payload []byte, session *HubSession) (err error)
-
-var fnHubSignal SignalFunc
-
-// HubSetSignal sets the web request function
-func HubSetSignal(fn SignalFunc) {
-	fnHubSignal = fn
 }
 
 // Make a checkpoint request
@@ -173,7 +113,13 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, session *H
 	filteredMsg := filterForLog(req)
 	filteredJSON, _ := note.JSONMarshal(filteredMsg)
 	if !silentLog {
-		session.LogInfo(ctx, "Request #%d (%db wire) %s %s", session.Transactions, wirelen, reqtype, filteredJSON)
+		if reqtype == "Ping" {
+			// These are extremely common for continuous sessions and never fail. They account for about 4% of the logs.
+			// We only LogInfo the response, not the request.
+			session.LogDebug(ctx, "Req %d (%db) %s %s", session.Transactions, wirelen, reqtype, filteredJSON)
+		} else {
+			session.LogInfo(ctx, "Req %d (%db) %s %s", session.Transactions, wirelen, reqtype, filteredJSON)
+		}
 	}
 
 	// Authenticate the session
@@ -308,12 +254,8 @@ func HubRequest(ctx context.Context, content []byte, event EventFunc, session *H
 	// Display the result
 	filteredRsp := filterForLog(rsp)
 	filteredJSON, _ = note.JSONMarshal(filteredRsp)
-	suppressedMsg := ""
-	if suppress {
-		suppressedMsg = " SUPPRESSED"
-	}
 	if !silentLog {
-		session.LogInfo(ctx, "Response #%d (%db wire%s) %s in %s %s", session.Transactions, wirelen, suppressedMsg, reqtype, time.Since(reqStart), filteredJSON)
+		session.LogInfo(ctx, "Rsp %d (%db) %s in %s %s", session.Transactions, wirelen, reqtype, time.Since(reqStart), filteredJSON)
 	}
 
 	// Done
@@ -340,7 +282,7 @@ func HubErrorResponse(ctx context.Context, session *HubSession, errorMessage str
 	result = response
 
 	// Display the result
-	session.LogInfo(ctx, "Response #%d (%db wire) Error %s", session.Transactions, wirelen, errorMessage)
+	session.LogInfo(ctx, "Rsp %d (%db) Error %s", session.Transactions, wirelen, errorMessage)
 
 	// Done
 	return
@@ -590,7 +532,7 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 	// the SessionIDMismatch flag which was a convenient bool in the protobuf.
 	if req.SessionIDMismatch {
 		timerName := timerBegin(ctx, "snappyDecode")
-		snote.Payload, err = snappy.Decode(nil, snote.Payload)
+		snote.Payload, err = snappyDecodeLimited(snote.Payload)
 		timerEnd(ctx, timerName)
 		if err != nil {
 			return err
@@ -1487,16 +1429,22 @@ func hubCheckpoint(ctx context.Context, session *HubSession, req notehubMessage,
 
 // SetTLSSupport tells the discover module that we do support TLS
 func SetTLSSupport(enabled bool) {
-	serverSupportsTLS = enabled
+	serverSupportsTLS.Store(enabled)
 }
 
 // TLSSupport tells the discover module that we do support TLS
 func TLSSupport() bool {
-	return serverSupportsTLS
+	return serverSupportsTLS.Load()
 }
 
 // filterForLog removes fields from a notehub request which contain customer data and should not be logged and returns a filteredNotehubMessage for logging purposes.
 func filterForLog(req notehubMessage) notehubMessage {
+	if req.MessageType == msgWebRequest {
+		if req.NotefileIDs != "" {
+			// Web requests store the URL path in this field. Replace them with "..." to avoid logging customer data.
+			req.NotefileIDs = "..."
+		}
+	}
 	req.nf = nil
 	req.cf = nil
 	return req

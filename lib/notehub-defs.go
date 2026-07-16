@@ -279,11 +279,12 @@ func InitDeviceSession(sess *note.DeviceSession, handlerAddr string, sessType Se
 }
 
 // IsSessionTimeBoundedByTransport determines if a transport string represents a time-bounded session.
-// Time-bounded sessions (packet/webhook) use persistent session storage that survives
+// Time-bounded sessions (packet/webhook/LoRA) use persistent session storage that survives
 // gaps in connectivity. Regular sessions (WiFi/cellular) use the TCP session log mechanism.
 func IsSessionTimeBoundedByTransport(transport string) bool {
 	return strings.HasPrefix(transport, "ntn:") ||
 		strings.HasPrefix(transport, "webhook:") ||
+		strings.HasPrefix(transport, "lorawan:") ||
 		transport == "packet" ||
 		transport == "webhook"
 }
@@ -335,8 +336,8 @@ func (session HubSession) logTag() string {
 	deviceUID := "[NO-DEVICE]"
 	sessionTypes := ""
 
-	if len(session.Session.SessionUID) > 8 {
-		sessionUID = session.Session.SessionUID[:8]
+	if len(session.Session.SessionUID) > 4 {
+		sessionUID = session.Session.SessionUID[:4]
 	} else if len(session.Session.SessionUID) > 0 {
 		sessionUID = session.Session.SessionUID
 	}
