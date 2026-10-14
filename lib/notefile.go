@@ -12,6 +12,7 @@ package notelib
 import (
 	"context"
 	"fmt"
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- no weak-randomness risk here: math/rand only spreads Note IDs, never a secret
 	"math/rand"
 	"strings"
 	"sync"
@@ -36,6 +37,10 @@ type NotefileEventInfo struct {
 	Transport  string      // The transport being dealt with at the time of the event setup
 	Fn         EventFunc   // The function to call when eventing of a change
 	Session    *HubSession // An argument to be passed to the event call
+
+	// One-shot note.Event.WireLen for the next event emitted with this info, set by
+	// ingest code just before the emitting call and consumed by event()
+	WireLen uint32
 }
 
 // Notefile is The outermost data structure of a Notefile JSON
@@ -247,8 +252,14 @@ func (nf *Notefile) GetNote(noteID string) (xnote note.Note, err error) {
 
 // event dispatches to the event proc based on the last change made to NoteID
 func (nf *Notefile) event(ctx context.Context, ei *NotefileEventInfo, local bool, NoteID string) {
-	// Exit if no event function
-	if ei == nil || ei.Fn == nil {
+	// Exit if no event function.  The note length is consumed before any return so
+	// that it can never be attributed to a later event emitted with the same ei.
+	if ei == nil {
+		return
+	}
+	wireLen := ei.WireLen
+	ei.WireLen = 0
+	if ei.Fn == nil {
 		return
 	}
 
@@ -279,6 +290,7 @@ func (nf *Notefile) event(ctx context.Context, ei *NotefileEventInfo, local bool
 	event.Deleted = xnote.Deleted
 	event.Sent = xnote.Sent
 	event.Bulk = xnote.Bulk
+	event.WireLen = wireLen
 	event.Updates = xnote.Updates
 	event.NotefileID = nf.notefileID
 	event.DeviceUID = ei.DeviceUID
@@ -729,6 +741,19 @@ func (nf *Notefile) MergeNotefile(ctx context.Context, ei *NotefileEventInfo, fr
 	// an inbound queue, delete the contents after modification because this is the core essential
 	// behavior of queues
 	for i := range modifiedNoteIDs {
+		// The incoming note's size, unless it's a deletion (bulk carriers are measured per record)
+		// Note that when on the wire, this is both an overstatement and an understatement
+		// of how much it took to transmit the data: it understates because it does not
+		// take into account its 'share' of the fact that the note in the notefile containing
+		// this bulk data has 'request' overhead, and it overstates because the entire request
+		// containing several notefiles and notes being merged is compressed by snappy
+		// and we can't possibly know this note's contribution.  It also is simply inaccurate
+		// because jcWireLen uses JSONMarshal, with its randomly-ordered fields, and so
+		// it isn't going to reproduce precisely what a different marshaler would have
+		// produced.  But it's still a useful metric for estimation.
+		if fromNote := fromNotefile.Notes[modifiedNoteIDs[i]]; ei != nil && !isFullTombstone(fromNote) && !fromNote.Bulk {
+			ei.WireLen = jcWireLen(fromNote.Body, fromNote.Payload)
+		}
 		nf.event(ctx, ei, false, modifiedNoteIDs[i])
 		if inboundQueuesProcessedByNotifier {
 			if nf.Queue {
@@ -960,7 +985,8 @@ func NotefileIDIsReservedWithExceptions(notefileID string) bool {
 		notefileID == note.NotecardRequestNotefile ||
 		notefileID == note.NotecardResponseNotefile ||
 		notefileID == note.TempNotefile ||
-		notefileID == note.FenceNotefile {
+		notefileID == note.FenceNotefile ||
+		notefileID == note.FenceLocalNotefile {
 		return false
 	}
 
@@ -970,6 +996,13 @@ func NotefileIDIsReservedWithExceptions(notefileID string) bool {
 
 // GetChanges retrieves the next batch of changes being tracked, initializing a new tracker if necessary.
 func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBatchSize int) (chgfile *Notefile, numChanges int, totalChanges int, totalNotes int, since int64, until int64, err error) {
+	return nf.getChanges(endpointID, includeTombstones, maxBatchSize, nil)
+}
+
+// getChanges is GetChanges with an optional note-ID filter. The notebox layer
+// uses the filter to keep non-synchronizing notefile descriptors out of catalog
+// exchange while still advancing the tracker past those hidden changes.
+func (nf *Notefile) getChanges(endpointID string, includeTombstones bool, maxBatchSize int, includeNote func(noteID string) bool) (chgfile *Notefile, numChanges int, totalChanges int, totalNotes int, since int64, until int64, err error) {
 	newNotefile := CreateNotefile(false)
 
 	// The special endpointID of "ReservedIDDelimiter" means that we do not want to use a tracker.  This
@@ -1046,6 +1079,9 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 	// should be ignored, or changes that are no longer here because of purged tombstones.
 	array := make([]int64, maxBatchSize+1)
 	for noteID, note := range nf.Notes {
+		if includeNote != nil && !includeNote(noteID) {
+			continue
+		}
 		if debugGetChanges {
 			logDebug(context.Background(), "note noteID:%s Change:%d Deleted:%t Sent:%t shouldIgnore:%t, isFullTombstone:%t",
 				noteID, note.Change, note.Deleted, note.Sent, changeShouldBeIgnored(&note, endpointID), isFullTombstone(note))
@@ -1093,6 +1129,9 @@ func (nf *Notefile) GetChanges(endpointID string, includeTombstones bool, maxBat
 
 	// Enumerate to see what to return
 	for noteID, note := range nf.Notes {
+		if includeNote != nil && !includeNote(noteID) {
+			continue
+		}
 		// If before the base we're tracking, skip it
 		if note.Change < since {
 			continue

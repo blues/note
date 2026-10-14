@@ -631,6 +631,9 @@ func (box *Notebox) ClearAllTrackers(ctx context.Context, endpointID string) {
 	// Iterate over all except the notebox itself
 	for i := range allNotefileIDs {
 		notefileID := allNotefileIDs[i]
+		if NotefileIsLocalOnly(notefileID) {
+			continue
+		}
 		openfile, file, err := box.OpenNotefile(ctx, notefileID)
 		if err == nil {
 			file.ClearTracker(endpointID)
@@ -667,6 +670,9 @@ func (box *Notebox) GetChangedNotefiles(ctx context.Context, endpointID string) 
 	changedNotefiles = []string{}
 	for i := range allNotefiles {
 		notefileID := allNotefiles[i]
+		if NotefileIsLocalOnly(notefileID) {
+			continue
+		}
 		openfile, file, err := box.OpenNotefile(ctx, notefileID)
 		if err == nil {
 			info, err := box.GetNotefileInfo(notefileID)
@@ -808,6 +814,16 @@ func NotefileAttributesFromID(notefileID string) (isQueue bool, syncToHub bool, 
 
 	// Done
 	return
+}
+
+// NotefileIsLocalOnly reports whether a valid notefile ID specifies neither
+// synchronization direction, and is therefore visible only on the side that
+// holds it. The filename syntax is interpreted only by NotefileAttributesFromID;
+// callers should use this derived property rather than checking for an "x"
+// suffix themselves.
+func NotefileIsLocalOnly(notefileID string) bool {
+	_, syncToHub, syncFromHub, _, _, err := NotefileAttributesFromID(notefileID)
+	return err == nil && !syncToHub && !syncFromHub
 }
 
 // NotefileExists returns true if notefile exists and is not deleted
@@ -1466,7 +1482,16 @@ func (box *Notebox) GetChanges(endpointID string, maxBatchSize int) (file *Notef
 	boxfile := box.Notefile()
 
 	// Get the tracked changes for that notefile
-	notefile, numChanges, totalChanges, totalNotes, since, until, err := boxfile.GetChanges(endpointID, true, maxBatchSize)
+	// A notebox is itself a notefile whose notes describe the constituent
+	// notefiles. Do not exchange descriptor or instance notes for a notefile
+	// that declares neither sync direction; otherwise a server-created .dbx
+	// would still become visible to the device even though its contents do not
+	// synchronize.
+	includeSyncableNotefile := func(noteID string) bool {
+		_, _, notefileID := parseCompositeNoteID(noteID)
+		return !NotefileIsLocalOnly(notefileID)
+	}
+	notefile, numChanges, totalChanges, totalNotes, since, until, err := boxfile.getChanges(endpointID, true, maxBatchSize, includeSyncableNotefile)
 	if err != nil {
 		return
 	}
@@ -1512,7 +1537,14 @@ func (box *Notebox) MergeNotebox(ctx context.Context, fromBoxfile *Notefile) (er
 			logDebug(ctx, "MergeNotebox: empty notefileID (changed notebox) coming from Notecard")
 			continue
 		}
-		isInstance, endpointID, _ := parseCompositeNoteID(noteID)
+		isInstance, endpointID, notefileID := parseCompositeNoteID(noteID)
+		// Notebox synchronization must not introduce, update, or delete a
+		// notefile that declares neither sync direction. This also protects
+		// against older peers that still include .dbx descriptors.
+		if NotefileIsLocalOnly(notefileID) {
+			delete(fromBoxfile.Notes, noteID)
+			continue
+		}
 		if isInstance && endpointID == box.instance.endpointID {
 			delete(fromBoxfile.Notes, noteID)
 		}
@@ -1704,6 +1736,12 @@ func (box *Notebox) NoteboxNotefileDesc() (allInfo []note.NotefileDesc) {
 // the notehub, there are two notefiles with the same port number.
 func NoteboxNotefileDescByPort(allInfo []note.NotefileDesc, port uint16) (info note.NotefileDesc, present bool) {
 	for _, inf := range allInfo {
+		// Port mappings are consumed by packet transport. A server-local file
+		// must not claim a device packet port or shadow a synchronizing file that
+		// happens to use the same port.
+		if NotefileIsLocalOnly(inf.NotefileID) {
+			continue
+		}
 		if inf.TemplatePort == port {
 			return inf, true
 		}

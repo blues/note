@@ -6,13 +6,19 @@ import (
 	"strings"
 )
 
+// doesJSONParse reports whether s decodes with json.Unmarshal.
+func doesJSONParse(s string) bool {
+	// nosemgrep: go.lang.security.deserialization.unsafe-deserialization-interface.go-unsafe-deserialization-interface -- no unsafe deserialization here: this only asks whether the string parses as JSON and throws the decoded value away
+	var v interface{}
+	return json.Unmarshal([]byte(s), &v) == nil
+}
+
 // FixCorruptJSON attempts to fix single-character corruptions in JSON data
 // It tries replacing each character with valid JSON structure characters
 // and returns the first successful parse
 func FixCorruptJSON(corruptData string) (string, error) {
 	// First, try to parse the JSON as-is
-	var test interface{}
-	if err := json.Unmarshal([]byte(corruptData), &test); err == nil {
+	if doesJSONParse(corruptData) {
 		// JSON is already valid
 		return corruptData, nil
 	}
@@ -40,8 +46,7 @@ func FixCorruptJSON(corruptData string) (string, error) {
 				candidate := string(runes)
 
 				// Try to parse the modified JSON
-				var testParse interface{}
-				if err := json.Unmarshal([]byte(candidate), &testParse); err == nil {
+				if doesJSONParse(candidate) {
 					// Success! Return the fixed JSON
 					return candidate, nil
 				}
@@ -55,8 +60,7 @@ func FixCorruptJSON(corruptData string) (string, error) {
 				runes[i] = replacement
 				candidate := string(runes)
 
-				var testParse interface{}
-				if err := json.Unmarshal([]byte(candidate), &testParse); err == nil {
+				if doesJSONParse(candidate) {
 					return candidate, nil
 				}
 			}
@@ -81,8 +85,7 @@ func FixCorruptJSON(corruptData string) (string, error) {
 				candidate = corruptData[:i] + string(char) + corruptData[i:]
 			}
 
-			var testParse interface{}
-			if err := json.Unmarshal([]byte(candidate), &testParse); err == nil {
+			if doesJSONParse(candidate) {
 				return candidate, nil
 			}
 		}
@@ -94,8 +97,7 @@ func FixCorruptJSON(corruptData string) (string, error) {
 // FixCorruptJSONVerbose is like FixCorruptJSON but returns details about what was fixed
 func FixCorruptJSONVerbose(corruptData string) (fixed string, changeDescription string, err error) {
 	// First, try to parse the JSON as-is
-	var test interface{}
-	if err := json.Unmarshal([]byte(corruptData), &test); err == nil {
+	if doesJSONParse(corruptData) {
 		return corruptData, "JSON was already valid", nil
 	}
 
@@ -113,8 +115,7 @@ func FixCorruptJSONVerbose(corruptData string) (fixed string, changeDescription 
 			runes[i] = replacement
 			candidate := string(runes)
 
-			var testParse interface{}
-			if err := json.Unmarshal([]byte(candidate), &testParse); err == nil {
+			if doesJSONParse(candidate) {
 				desc := fmt.Sprintf("Replaced character at position %d: '%c' (0x%X) -> '%c'",
 					i, original, original, replacement)
 				if original < 32 || original > 126 {
@@ -140,8 +141,7 @@ func FixCorruptJSONVerbose(corruptData string) (fixed string, changeDescription 
 				candidate = corruptData[:i] + string(char) + corruptData[i:]
 			}
 
-			var testParse interface{}
-			if err := json.Unmarshal([]byte(candidate), &testParse); err == nil {
+			if doesJSONParse(candidate) {
 				desc := fmt.Sprintf("Inserted '%c' at position %d", char, i)
 				return candidate, desc, nil
 			}
@@ -186,8 +186,7 @@ func TryFixWithContext(corruptData string) (string, error) {
 					runes[i+1] = ':'
 					candidate := string(runes)
 
-					var test interface{}
-					if err := json.Unmarshal([]byte(candidate), &test); err == nil {
+					if doesJSONParse(candidate) {
 						return candidate, nil
 					}
 					runes[i+1] = original

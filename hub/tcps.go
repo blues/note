@@ -52,6 +52,7 @@ func tcpsHandler() {
 	deviceCertPool.AppendCertsFromPEM(deviceCA)
 
 	// Build from cert pool
+	// nosemgrep: go.lang.security.audit.crypto.missing-ssl-minversion.missing-ssl-minversion -- no weak-TLS downgrade here: a Go server floors at TLS 1.2 when MinVersion is unset
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{serviceKeyPair},
 		ClientCAs:    deviceCertPool,

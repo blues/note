@@ -84,13 +84,23 @@ func eventBulk(session *notelib.HubSession, local bool, event note.Event) (err e
 	for {
 
 		// Get the next entry
+		recordStart := bdc.BinLen
 		body, payload, when, wherewhen, olc, _, success := bdc.BulkDecodeNextEntry(context.Background())
 		if !success {
 			break
 		}
 
-		// Generate a new notification request with a unique EventUID
+		// Generate a new notification request with a unique EventUID.  The note's length
+		// is the number of bytes its record occupied in the bulk data, including when/where.
+		// Note that when on the wire, this is both an overstatement and an understatement
+		// of how much it took to transmit the data: it understates because it does not
+		// take into account its 'share' of the fact that the note in the notefile containing
+		// this bulk data also transmits the content of the template, and it overstates
+		// because the entire bulk data block of N notes is snappy-compressed as a single
+		// content-dependent block of which we don't know this entry's contribution.
+		// But this is the best we can do, and it is a useful metric for estimation.
 		nn := event
+		nn.WireLen = uint32(recordStart - bdc.BinLen)
 		nn.Req = note.EventAdd
 		nn.When = when
 		nn.Where = olc

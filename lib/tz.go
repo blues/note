@@ -14,10 +14,15 @@ type TimeZoneNames struct {
 	ID   int
 }
 
-var (
-	tznuminit bool
-	tznums    map[string]int
-)
+// tznums is built once at package init and is read-only thereafter, since
+// TimeZoneNameToNumber is called concurrently from per-connection goroutines.
+var tznums = func() map[string]int {
+	m := map[string]int{}
+	for i := 0; tznames[i] != ""; i++ {
+		m[tznames[i]] = i
+	}
+	return m
+}()
 
 // Note that the entire purpose of this module is to convert these standardized zone names into numbers
 // and vice-versa.  This list is NOT sorted and doesn't need to be.  However, if you add a new one,
@@ -625,13 +630,6 @@ var tznames = [...]string{
 
 // TimeZoneNameToNumber converts a timezone number to a name
 func TimeZoneNameToNumber(name string) int {
-	if !tznuminit {
-		tznuminit = true
-		tznums = map[string]int{}
-		for i := 0; tznames[i] != ""; i++ {
-			tznums[tznames[i]] = i
-		}
-	}
 	val, present := tznums[name]
 	if !present {
 		return 0

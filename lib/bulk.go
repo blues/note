@@ -61,6 +61,44 @@ const (
 // Maximum number of flags supported
 const maxBinFlags = 64
 
+// BulkNoVariableEquivalent returns the alternate on-air encoding of a record that
+// BulkEncodeNextEntry produced: the bytes a NO_VARIABLE-capable encoder emits for identical
+// content, in which the 2-byte variable-length offset is omitted and bulkflagNoVariable is set
+// in the header instead.  Notecard firmware from 2025-09 onward encodes that shorter form
+// (notecard src/app/json.c, "No variable data - set NO_VARIABLE flag and shift data to
+// eliminate offset"), so a checksum a device computes over its own encoding cannot match a
+// checksum over ours even when the content is identical.  Callers comparing against a
+// device-supplied checksum should accept either form.
+//
+// It returns nil when a NO_VARIABLE-capable encoder would NOT have collapsed this record, so
+// that "there is no alternate form" is distinguishable from "here is the alternate form".  The
+// conditions mirror the C encoder exactly: the format must not be the original one, and the
+// record must carry no payload, no flags and no OLC.
+//
+// The argument must be a SINGLE record.  BulkEncodeNextEntry appends to the context buffer
+// rather than replacing it, so only the output of the first call on a fresh context qualifies;
+// a multi-record buffer would have only its first record collapsed.
+//
+// This deliberately does not change what BulkEncodeNextEntry emits.  Notecard firmware older
+// than the change above skips the offset unconditionally on decode and would misparse a
+// collapsed record, so the uncollapsed form remains the only one safe to transmit.
+func BulkNoVariableEquivalent(noteFormat uint32, binary []byte) []byte {
+	if noteFormat == BulkNoteFormatOriginal || len(binary) < 3 {
+		return nil
+	}
+	binHeader := binary[0]
+	if binHeader&bulkflagNoVariable != 0 {
+		return nil
+	}
+	if binHeader&(bulkflagPayloadL|bulkflagPayloadH|bulkflagFlagsL|bulkflagFlagsH|bulkflagOLCL|bulkflagOLCH) != 0 {
+		return nil
+	}
+	equivalent := make([]byte, 0, len(binary)-2)
+	equivalent = append(equivalent, binHeader|bulkflagNoVariable)
+	equivalent = append(equivalent, binary[3:]...)
+	return equivalent
+}
+
 // BulkBody is the bulk data note body
 type BulkBody struct {
 	// The format of the encoded binary note

@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/blues/note-go/note"
+	"github.com/golang/snappy"
 	golc "github.com/google/open-location-code/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -518,8 +520,11 @@ func TestBulkFlagNoVariable(t *testing.T) {
 	require.False(t, success, "Should have no more records after processing all three")
 	require.Nil(t, body, "Body should be nil when no more records")
 
-	// Test that encoding does NOT set the bulkFlagNoVariable flag
-	// (it's a decode-only feature)
+	// Test that encoding does NOT set the bulkFlagNoVariable flag.  This is deliberate and
+	// load-bearing, not an oversight: Notecard firmware older than 2025-09 consumes the 2-byte
+	// offset unconditionally and would misparse a collapsed record.  See
+	// TestBulkEncoderStaysUncollapsed and BulkNoVariableEquivalent, which reconciles the two
+	// encodings for checksum comparison without changing what we transmit.
 	encodeCtx, err := BulkEncodeTemplate(templateJSON)
 	require.NoError(t, err)
 
@@ -1108,4 +1113,400 @@ func TestVariableLengthArrayMissingField(t *testing.T) {
 			assert.Empty(t, arr, "when_ms_32 should round-trip as empty array")
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------------------------
+// NO_VARIABLE equivalence
+//
+// The Notecard's encoder (notecard src/app/json.c, ConvertJSONToBinUsingTemplateHandler) ends
+// with a "collapse" step: a record carrying no payload, no bool flags and no OLC has its 2-byte
+// variableLengthOffset removed and BULKFLAG_NO_VARIABLE (0x80) set in the header instead.  This
+// encoder deliberately never does that, because Notecard firmware older than 2025-09 consumes
+// the offset unconditionally on decode and would misparse the shorter record.
+//
+// The two encoders therefore emit different bytes for identical content, and a device that
+// checksums its own encoding can never match a checksum of ours.  BulkNoVariableEquivalent
+// reconciles that without changing a single transmitted byte.
+//
+// The vectors below are written out BY HAND from the format the C encoder specifies -- they were
+// not produced by running it.  That is deliberate rather than a shortcut: they never consult this
+// package's encoder either, so they are an independent statement of the format and they fail if
+// either side drifts.  What they do NOT prove is that the C encoder matches its own
+// specification, so confirming them against a real Notecard -- a trace capture, or a harness
+// linked against the firmware objects calling ConvertJSONToBinUsingTemplate -- would be a
+// worthwhile follow-up.
+//
+// The CRCs assume notecard's crc32Hash (src/global/crchash.c) is plain CRC-32/IEEE, which is what
+// Go's hash/crc32.ChecksumIEEE computes.  That reading of the C is unverified against hardware.
+// ---------------------------------------------------------------------------------------------
+
+// The env.template a radnote registers for satellite operation: four variable-length strings,
+// no numerics, no booleans, no payload.  This is exactly the shape the Notecard collapses and
+// this encoder does not.
+const radnoteEnvTemplate = `{"sample_mins_ntn":"0","alarm_usv":"0","_sync_outbound_mins_ntn":"0","_sync_inbound_mins_ntn":"0"}`
+
+func bulkTemplateJSON(t *testing.T, noteFormat uint32, template string) []byte {
+	t.Helper()
+	templateJSON, err := note.JSONMarshal(BulkBody{NoteFormat: noteFormat, NoteTemplate: template})
+	require.NoError(t, err)
+	return templateJSON
+}
+
+func bulkEncodeOne(t *testing.T, noteFormat uint32, template string, body map[string]interface{}) []byte {
+	t.Helper()
+	encodeCtx, err := BulkEncodeTemplate(bulkTemplateJSON(t, noteFormat, template))
+	require.NoError(t, err)
+	encoded, err := encodeCtx.BulkEncodeNextEntry(context.Background(), body, []byte{}, 0, 0, "", "", false)
+	require.NoError(t, err)
+	return encoded
+}
+
+// wireVector is one record as a NO_VARIABLE-capable Notecard encodes it, written out by hand
+// from the FlexNano wire format rather than captured from a device: a header byte, then each
+// field in template order, where a string is a 1-byte length followed by its bytes.  Deriving
+// them by hand is the point -- nothing here consults our own encoder, so these vectors are an
+// independent statement of what the format IS, and they fail if our encoder drifts from it.
+// Confirming them against a real Notecard trace would strengthen them further; none has been
+// captured yet.
+type wireVector struct {
+	name string
+	// body is encoded against radnoteEnvTemplate unless template is set
+	template string
+	body     map[string]interface{}
+	// wireBytes is the record as the C encoder in notecard src/app/json.c specifies it, hex
+	// encoded, and wireCRC is crc32 over exactly those bytes
+	wireBytes string
+	wireCRC   uint32
+	// collapses is whether the C encoder's collapse step applies to this record shape
+	collapses bool
+}
+
+var wireVectors = []wireVector{{
+	// The steady state of a provisioned radnote: three tiers unset ("-"), alarm disarmed
+	name:      "radnote env unset",
+	body:      map[string]interface{}{"sample_mins_ntn": "-", "alarm_usv": "0", "_sync_outbound_mins_ntn": "-", "_sync_inbound_mins_ntn": "-"},
+	wireBytes: "80012d0130012d012d",
+	wireCRC:   0x5c0cf8e2,
+	collapses: true,
+}, {
+	name:      "radnote env configured",
+	body:      map[string]interface{}{"sample_mins_ntn": "60", "alarm_usv": "5.0", "_sync_outbound_mins_ntn": "720", "_sync_inbound_mins_ntn": "1440"},
+	wireBytes: "8002363003352e30033732300431343430",
+	wireCRC:   0xb29447f6,
+	collapses: true,
+}, {
+	// Env vars outside the template must not perturb the encoding -- the device checksums its
+	// WHOLE env map through this template, so anything else it holds has to fall away
+	name:      "env vars outside the template are ignored",
+	body:      map[string]interface{}{"zz_other": "ignored", "sample_mins_ntn": "-", "_air_mins": "5", "alarm_usv": "0", "_sync_outbound_mins_ntn": "-", "_sync_inbound_mins_ntn": "-"},
+	wireBytes: "80012d0130012d012d",
+	wireCRC:   0x5c0cf8e2,
+	collapses: true,
+}, {
+	// Notehub holding none of the templated names: every field encodes as a zero-length string
+	name:      "all fields missing",
+	body:      map[string]interface{}{},
+	wireBytes: "8000000000",
+	wireCRC:   0x77c4478f,
+	collapses: true,
+}, {
+	// The degenerate case: the collapse leaves a single header byte
+	name:      "empty template",
+	template:  `{}`,
+	body:      map[string]interface{}{},
+	wireBytes: "80",
+	wireCRC:   0x3fba6cad,
+	collapses: true,
+}, {
+	// A bool sets BULKFLAG_FLAGSL, so the Notecard does NOT collapse -- and for these records
+	// the two encoders already agree byte for byte, which is why the plain comparison works
+	name:      "bool in template suppresses the collapse",
+	template:  `{"enabled":true,"name":"0"}`,
+	body:      map[string]interface{}{"enabled": true, "name": "x"},
+	wireBytes: "040500017801",
+	wireCRC:   0x7390c59a,
+	collapses: false,
+}, {
+	// Numeric fields live in the fixed area and collapse just like strings
+	name:      "numeric template",
+	template:  `{"a":14,"b":14.1}`,
+	body:      map[string]interface{}{"a": 7, "b": 0.5},
+	wireBytes: "80070000000000003f",
+	wireCRC:   0x3cff30c5,
+	collapses: true,
+}}
+
+// TestBulkNoVariableEquivalentMatchesWireFormat is the anchor of this suite: it pins our output
+// against the wire format itself, spelled out by hand in wireVectors.  For every record shape,
+// exactly one of {what we transmit, the equivalent form} is byte-identical to what a
+// NO_VARIABLE-capable device encodes -- so comparing a device checksum against both always has a
+// chance of matching, and comparing against only one never did.
+func TestBulkNoVariableEquivalentMatchesWireFormat(t *testing.T) {
+	for _, v := range wireVectors {
+		t.Run(v.name, func(t *testing.T) {
+			template := v.template
+			if template == "" {
+				template = radnoteEnvTemplate
+			}
+			wantWire, err := hex.DecodeString(v.wireBytes)
+			require.NoError(t, err)
+			require.Equal(t, v.wireCRC, crc32.ChecksumIEEE(wantWire),
+				"the vector bytes and vector CRC disagree; one of them was transcribed wrong")
+
+			transmitted := bulkEncodeOne(t, BulkNoteFormatFlexNano, template, v.body)
+			equivalent := BulkNoVariableEquivalent(BulkNoteFormatFlexNano, transmitted)
+
+			// Whatever we transmit must stay decodable by pre-2025-09 firmware
+			require.Equal(t, uint8(0), transmitted[0]&bulkflagNoVariable,
+				"transmitted form must never set NO_VARIABLE")
+			require.GreaterOrEqual(t, len(transmitted), 3, "transmitted form keeps its 2-byte offset")
+
+			if !v.collapses {
+				require.Nil(t, equivalent,
+					"the Notecard did not collapse this record, so there is no equivalent form")
+				require.Equal(t, wantWire, transmitted,
+					"for an uncollapsed record the two encoders must already agree byte for byte")
+				return
+			}
+
+			require.NotNil(t, equivalent, "the Notecard collapsed this record")
+			require.Equal(t, wantWire, equivalent,
+				"equivalent form must reproduce the Notecard's bytes exactly")
+			require.Equal(t, v.wireCRC, crc32.ChecksumIEEE(equivalent),
+				"this is the checksum the device sends us; it is what the comparison must accept")
+
+			// And demonstrate the bug that motivated all of this: without the equivalent form
+			// the comparison can never succeed for these records
+			require.NotEqual(t, v.wireCRC, crc32.ChecksumIEEE(transmitted),
+				"if these ever matched, the equivalent form would be unnecessary")
+		})
+	}
+}
+
+// TestBulkNoVariableEquivalentShape pins the transform itself, independent of any vector: the
+// equivalent form is the transmitted form with the offset excised and NO_VARIABLE set, and
+// nothing else moves.
+func TestBulkNoVariableEquivalentShape(t *testing.T) {
+	for _, v := range wireVectors {
+		if !v.collapses {
+			continue
+		}
+		t.Run(v.name, func(t *testing.T) {
+			template := v.template
+			if template == "" {
+				template = radnoteEnvTemplate
+			}
+			transmitted := bulkEncodeOne(t, BulkNoteFormatFlexNano, template, v.body)
+			equivalent := BulkNoVariableEquivalent(BulkNoteFormatFlexNano, transmitted)
+			require.NotNil(t, equivalent)
+
+			require.Len(t, equivalent, len(transmitted)-2, "exactly the 2-byte offset is dropped")
+			require.Equal(t, transmitted[0]|bulkflagNoVariable, equivalent[0], "header gains only NO_VARIABLE")
+			require.Equal(t, transmitted[3:], equivalent[1:], "field bytes are untouched")
+
+			// The two forms are structurally distinguishable by bit 0x80, so accepting both can
+			// never make a DIFFERENT environment look equal -- only a genuine CRC32 collision can
+			require.NotEqual(t, transmitted[0]&bulkflagNoVariable, equivalent[0]&bulkflagNoVariable)
+		})
+	}
+}
+
+// TestBulkNoVariableEquivalentPreservesNoOmitEmpty covers the one header bit the Notecard
+// deliberately does NOT count as variable data.  Its hasVariableData test looks at PAYLOAD,
+// FLAGS and OLC only, so a noOmitEmpty record still collapses and keeps 0x40 alongside 0x80.
+func TestBulkNoVariableEquivalentPreservesNoOmitEmpty(t *testing.T) {
+	encodeCtx, err := BulkEncodeTemplate(bulkTemplateJSON(t, BulkNoteFormatFlexNano, radnoteEnvTemplate))
+	require.NoError(t, err)
+	transmitted, err := encodeCtx.BulkEncodeNextEntry(context.Background(),
+		map[string]interface{}{"sample_mins_ntn": "-", "alarm_usv": "0",
+			"_sync_outbound_mins_ntn": "-", "_sync_inbound_mins_ntn": "-"},
+		[]byte{}, 0, 0, "", "", true)
+	require.NoError(t, err)
+	require.Equal(t, uint8(bulkflagNoOmitEmpty), transmitted[0], "noOmitEmpty must set 0x40 and nothing else")
+
+	equivalent := BulkNoVariableEquivalent(BulkNoteFormatFlexNano, transmitted)
+	require.NotNil(t, equivalent, "noOmitEmpty is not variable data, so this still collapses")
+	require.Equal(t, uint8(bulkflagNoOmitEmpty|bulkflagNoVariable), equivalent[0],
+		"the equivalent form must carry both 0x40 and 0x80")
+}
+
+// TestBulkNoVariableEquivalentDecodesIdentically is the content-equivalence check.  The decoder
+// is an independent oracle: it understood bulkflagNoVariable long before this helper existed, so
+// agreeing with it proves the helper rewrites framing without disturbing content.
+func TestBulkNoVariableEquivalentDecodesIdentically(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name     string
+		template string
+		body     map[string]interface{}
+	}{
+		{"strings", radnoteEnvTemplate, map[string]interface{}{
+			"sample_mins_ntn":         "usb:5;high:15;normal:15;low:60;0",
+			"alarm_usv":               "0.25",
+			"_sync_outbound_mins_ntn": "2880",
+			"_sync_inbound_mins_ntn":  "-",
+		}},
+		{"signed ints", `{"a":11,"b":12,"c":13,"d":14,"e":18}`, map[string]interface{}{
+			"a": 100, "b": 30000, "c": 8000000, "d": 2000000000, "e": 90000000000,
+		}},
+		{"unsigned ints", `{"a":21,"b":22,"c":23,"d":24}`, map[string]interface{}{
+			"a": 250, "b": 65000, "c": 16000000, "d": 4000000000,
+		}},
+		{"floats", `{"h":12.1,"f":14.1,"d":18.1}`, map[string]interface{}{
+			"h": 1.5, "f": 2.25, "d": 3.125,
+		}},
+		{"mixed", `{"n":"0","i":14,"f":14.1}`, map[string]interface{}{
+			"n": "mixed", "i": 7, "f": 0.5,
+		}},
+		{"empty string fields", radnoteEnvTemplate, map[string]interface{}{
+			"sample_mins_ntn": "", "alarm_usv": "", "_sync_outbound_mins_ntn": "", "_sync_inbound_mins_ntn": "",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			templateJSON := bulkTemplateJSON(t, BulkNoteFormatFlexNano, tc.template)
+			encodeCtx, err := BulkEncodeTemplate(templateJSON)
+			require.NoError(t, err)
+			transmitted, err := encodeCtx.BulkEncodeNextEntry(ctx, tc.body, []byte{}, 0, 0, "", "", false)
+			require.NoError(t, err)
+
+			equivalent := BulkNoVariableEquivalent(BulkNoteFormatFlexNano, transmitted)
+			require.NotNil(t, equivalent, "no payload, flags or OLC, so this has an equivalent form")
+
+			decode := func(binaryData []byte) map[string]interface{} {
+				decodeCtx, err := BulkDecodeTemplate(ctx, templateJSON, binaryData)
+				require.NoError(t, err)
+				body, _, _, _, _, _, success := decodeCtx.BulkDecodeNextEntry(ctx)
+				require.True(t, success)
+				return body
+			}
+			require.Equal(t, decode(transmitted), decode(equivalent),
+				"both framings must decode to the same body")
+		})
+	}
+}
+
+// TestBulkNoVariableEquivalentRefuses covers every case where the Notecard would have left the
+// record alone.  Returning a value in any of these would make the tolerant comparison accept a
+// checksum no device ever computes, silently suppressing an environment update the device needs.
+func TestBulkNoVariableEquivalentRefuses(t *testing.T) {
+	ctx := context.Background()
+	env := map[string]interface{}{"sample_mins_ntn": "-", "alarm_usv": "0",
+		"_sync_outbound_mins_ntn": "-", "_sync_inbound_mins_ntn": "-"}
+	encoded := bulkEncodeOne(t, BulkNoteFormatFlexNano, radnoteEnvTemplate, env)
+
+	t.Run("original format never collapses", func(t *testing.T) {
+		// Mirrors the C guard `if (binFormat != BULK_NOTEFORMAT_ORIGINAL)`
+		require.Nil(t, BulkNoVariableEquivalent(BulkNoteFormatOriginal, encoded))
+	})
+	t.Run("too short to carry a header and offset", func(t *testing.T) {
+		require.Nil(t, BulkNoVariableEquivalent(BulkNoteFormatFlexNano, nil))
+		require.Nil(t, BulkNoVariableEquivalent(BulkNoteFormatFlexNano, []byte{}))
+		require.Nil(t, BulkNoVariableEquivalent(BulkNoteFormatFlexNano, []byte{0x00}))
+		require.Nil(t, BulkNoVariableEquivalent(BulkNoteFormatFlexNano, []byte{0x00, 0x00}))
+	})
+	t.Run("already collapsed", func(t *testing.T) {
+		require.Nil(t, BulkNoVariableEquivalent(BulkNoteFormatFlexNano,
+			append([]byte{bulkflagNoVariable}, encoded[3:]...)))
+	})
+	t.Run("payload present", func(t *testing.T) {
+		encodeCtx, err := BulkEncodeTemplate(bulkTemplateJSON(t, BulkNoteFormatFlexNano, radnoteEnvTemplate))
+		require.NoError(t, err)
+		withPayload, err := encodeCtx.BulkEncodeNextEntry(ctx, env, []byte{1, 2, 3}, 0, 0, "", "", false)
+		require.NoError(t, err)
+		require.NotEqual(t, uint8(0), withPayload[0]&(bulkflagPayloadL|bulkflagPayloadH))
+		require.Nil(t, BulkNoVariableEquivalent(BulkNoteFormatFlexNano, withPayload))
+	})
+	t.Run("bool flags present", func(t *testing.T) {
+		withFlags := bulkEncodeOne(t, BulkNoteFormatFlexNano, `{"enabled":true,"name":"0"}`,
+			map[string]interface{}{"enabled": true, "name": "x"})
+		require.NotEqual(t, uint8(0), withFlags[0]&(bulkflagFlagsL|bulkflagFlagsH))
+		require.Nil(t, BulkNoVariableEquivalent(BulkNoteFormatFlexNano, withFlags))
+	})
+	t.Run("unconvertible OLC occupies the variable area", func(t *testing.T) {
+		// Only Flex carries an OLC; an OLC that will not pack into an int64 is appended to the
+		// variable-length area, which sets BULKFLAG_OLCL and suppresses the collapse.  Verified
+		// against the firmware: it emits header 0x10 for exactly this input.
+		encodeCtx, err := BulkEncodeTemplate(bulkTemplateJSON(t, BulkNoteFormatFlex, radnoteEnvTemplate))
+		require.NoError(t, err)
+		withOLC, err := encodeCtx.BulkEncodeNextEntry(ctx, env, []byte{}, 0, 0, "not-an-olc", "", false)
+		require.NoError(t, err)
+		require.Equal(t, uint8(bulkflagOLCL), withOLC[0]&(bulkflagOLCL|bulkflagOLCH))
+		require.Nil(t, BulkNoVariableEquivalent(BulkNoteFormatFlex, withOLC))
+	})
+}
+
+// TestBulkNoVariableEquivalentFlexCollapseDecision checks the collapse PREDICATE for Flex, which
+// packet.go will happily hand us because the note format is whatever the device registered.
+//
+// Only the predicate: the Flex records themselves are NOT byte-comparable with the Notecard's,
+// for two reasons unrelated to NO_VARIABLE.  BulkEncodeNextEntry ignores its `when` argument and
+// substitutes time.Now(), and this package's OLCToINT64 is missing the `plusCode` validity check
+// that notecard src/app/olc64.c ends with -- so for an empty OLC the firmware writes -1 ("no
+// location") where we write 6221821273427820543.  A Flex env template would therefore still
+// mismatch after this fix.  In practice reqenv.c hardwires the env template to FlexNano, so the
+// env path is unaffected.  See the residual-issues note on this change.
+func TestBulkNoVariableEquivalentFlexCollapseDecision(t *testing.T) {
+	ctx := context.Background()
+	env := map[string]interface{}{"sample_mins_ntn": "-", "alarm_usv": "0",
+		"_sync_outbound_mins_ntn": "-", "_sync_inbound_mins_ntn": "-"}
+
+	for _, tc := range []struct {
+		name          string
+		olc           string
+		wantCollapses bool
+	}{
+		// Firmware ground truth: header 0x80 (collapsed) for both of these
+		{"no olc", "", true},
+		{"olc that packs into an int64", "87JC9RF9+86XJ", true},
+		// Firmware ground truth: header 0x10 (BULKFLAG_OLCL), not collapsed
+		{"olc that does not pack", "not-an-olc", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encodeCtx, err := BulkEncodeTemplate(bulkTemplateJSON(t, BulkNoteFormatFlex, radnoteEnvTemplate))
+			require.NoError(t, err)
+			transmitted, err := encodeCtx.BulkEncodeNextEntry(ctx, env, []byte{}, 0, 0, tc.olc, "", false)
+			require.NoError(t, err)
+
+			equivalent := BulkNoVariableEquivalent(BulkNoteFormatFlex, transmitted)
+			if !tc.wantCollapses {
+				require.Nil(t, equivalent)
+				return
+			}
+			require.NotNil(t, equivalent)
+			require.Len(t, equivalent, len(transmitted)-2)
+			require.Equal(t, transmitted[0]|bulkflagNoVariable, equivalent[0])
+			require.Equal(t, transmitted[3:], equivalent[1:])
+
+			// Flex keeps when/olc64 in the fixed area, so the collapsed form must still decode.
+			// Unlike FlexNano, a Flex payload is snappy-compressed in transit (bulk.go:186).
+			decodeCtx, err := BulkDecodeTemplate(ctx,
+				bulkTemplateJSON(t, BulkNoteFormatFlex, radnoteEnvTemplate),
+				snappy.Encode(nil, equivalent))
+			require.NoError(t, err)
+			decoded, _, _, _, _, _, success := decodeCtx.BulkDecodeNextEntry(ctx)
+			require.True(t, success, "the collapsed Flex form must decode")
+			require.Equal(t, "-", decoded["sample_mins_ntn"],
+				"the collapsed Flex form must decode to the right fields, not shifted by two bytes")
+		})
+	}
+}
+
+// TestBulkEncoderStaysUncollapsed is a tripwire, not a behavioural test.  Notecard firmware
+// predating the 2025-09 NO_VARIABLE change consumes the 2-byte offset unconditionally on decode,
+// so it would misparse a collapsed record and write garbage env values.  Anyone who later
+// "fixes" this encoder to match the C side must fail here and go read why.  Changing it is a
+// wire break that needs a firmware floor and a LoRa story first: loranote/App/binary.c is a
+// separate decoder that has never supported NO_VARIABLE at all.
+func TestBulkEncoderStaysUncollapsed(t *testing.T) {
+	for _, noteFormat := range []uint32{BulkNoteFormatFlex, BulkNoteFormatFlexNano} {
+		encoded := bulkEncodeOne(t, noteFormat, radnoteEnvTemplate,
+			map[string]interface{}{"sample_mins_ntn": "-", "alarm_usv": "0",
+				"_sync_outbound_mins_ntn": "-", "_sync_inbound_mins_ntn": "-"})
+		require.Equal(t, uint8(0), encoded[0]&bulkflagNoVariable,
+			"format %d: transmitted encoding must not set NO_VARIABLE -- older Notecards cannot decode it",
+			noteFormat)
+		require.GreaterOrEqual(t, len(encoded), 3,
+			"format %d: the 2-byte variable-length offset must still be present", noteFormat)
+	}
 }

@@ -63,6 +63,8 @@ type nf struct {
 	Notefiles *map[string]*Notefile   `json:"NM,omitempty"`
 	Body      *map[string]interface{} `json:"NB,omitempty"`
 	Payload   *[]byte                 `json:"NP,omitempty"`
+	// Number of bytes that Body occupied on the wire, in its compressed form
+	bodyWireLen int
 }
 
 // cf is the compressed format of these structures
@@ -441,6 +443,7 @@ type Packet struct {
 	ConnectionID []byte
 	MessagePort  uint8
 	Data         []byte
+	WireDataLen  int // Length of Data as it was sent, before any decompression
 }
 
 // Note that if PacketUplinkMtu is 0, it is assumed to be the same as PacketDownlinkMtu

@@ -29,6 +29,7 @@ func GenerateEventUid(event *note.Event) string {
 	}
 
 	// Create a new MD5 hash instance
+	// nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 -- no MD5 collision risk here: nothing trusts the hash, it only builds a Note ID that won't collide with another device's in the same app
 	var h = md5.New()
 
 	// Hash deviceUID so we don't conflict with another device in the app, plus SensorUID

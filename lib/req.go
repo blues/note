@@ -290,7 +290,7 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 			rsp.Err = "no notefile specified"
 			break
 		}
-		isQueue, _, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
+		isQueue, _, syncFromHub, _, _, _ := NotefileAttributesFromID(req.NotefileID)
 		if req.NoteID == "" {
 			if !isQueue {
 				rsp.Err = "no note ID specified"
@@ -341,7 +341,7 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 		rsp.Time = xnote.When()
 		rsp.Latitude, rsp.Longitude, rsp.LocationTime = Where(xnote)
 		if req.Edge {
-			rsp.Pending = file.ChangePendingForEndpoint(note.DefaultDeviceEndpointID, xnote)
+			rsp.Pending = syncFromHub && file.ChangePendingForEndpoint(note.DefaultDeviceEndpointID, xnote)
 			rsp.Edge = xnote.GetEndpointID() == note.DefaultDeviceEndpointID
 		}
 		if req.Delete {
@@ -402,13 +402,21 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 
 		// Prune the list of notefiles based on whether or not the user's perception is
 		// that they should ever even exist on the notehub. The obvious things we're trying to skim off
-		// are .qo, .qos, and anything ending in 'x' which is a local-only file
+		// are .qo and .qos.  A notefile that declares neither sync direction is pruned only when
+		// we are acting on behalf of the device, which is the case for the LoRa/NTN packet paths
+		// that reach here by looping back through the V0 API; an API caller such as noteboard must
+		// be able to see these files because the API is the only way to manage them.
+		actingAsDevice := endpointID == note.DefaultDeviceEndpointID
 		newNotefiles := []string{}
 		for _, file := range notefiles {
 			isQueue, syncToHub, syncFromHub, _, _, _ := NotefileAttributesFromID(file)
-			if !(isQueue && syncToHub) && (syncToHub || syncFromHub) {
-				newNotefiles = append(newNotefiles, file)
+			if isQueue && syncToHub {
+				continue
 			}
+			if !syncToHub && !syncFromHub && actingAsDevice {
+				continue
+			}
+			newNotefiles = append(newNotefiles, file)
 		}
 		notefiles = newNotefiles
 
@@ -556,8 +564,11 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 			_ = file.DeleteTracker(req.TrackerID)
 		}
 
-		// We'll need to know if it's a queue
-		isQueue, _, _, _, _, _ := NotefileAttributesFromID(req.NotefileID)
+		// We'll need to know if it's a queue, and whether the notefile can sync to the
+		// device at all.  A note is only ever pending to the device in a notefile that
+		// synchronizes from the hub; in any other notefile the device has no tracker,
+		// and ChangePendingForEndpoint would report every note as pending.
+		isQueue, _, syncFromHub, _, _, _ := NotefileAttributesFromID(req.NotefileID)
 
 		// Generate the list of notes in the response data structure
 		noteIDs := chgfile.NoteIDs(true)
@@ -591,7 +602,7 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 				onote, err := file.GetNote(noteID)
 				if err == nil {
 					if req.Pending {
-						info.Pending = file.ChangePendingForEndpoint(note.DefaultDeviceEndpointID, onote)
+						info.Pending = syncFromHub && file.ChangePendingForEndpoint(note.DefaultDeviceEndpointID, onote)
 					}
 					if req.Edge {
 						info.Edge = onote.GetEndpointID() == note.DefaultDeviceEndpointID

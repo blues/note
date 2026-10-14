@@ -421,12 +421,20 @@ func openHubNoteboxForDevice(ctx context.Context, session *HubSession, deviceUID
 func sawNotefile(session *HubSession, box *Notebox, notefileID string) {
 	// First time through
 	if !session.NotefilesUpdated {
-		session.Notefiles = box.Notefiles(false)
+		session.Notefiles = nil
+		for _, file := range box.Notefiles(false) {
+			if !NotefileIsLocalOnly(file) {
+				session.Notefiles = append(session.Notefiles, file)
+			}
+		}
 		session.NotefilesUpdated = true
 	}
 
 	// Exit if just loading the notefiles
 	if notefileID == "" {
+		return
+	}
+	if NotefileIsLocalOnly(notefileID) {
 		return
 	}
 
@@ -522,6 +530,17 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 		snote.Payload = req.GetPayload()
 	}
 
+	// The note's length is that of its body plus its payload as transmitted on the wire, or
+	// for a segmented upload (whose length is only reported when complete) its total payload.
+	// Unfortunately, this is not completely accurate because jcWireLen uses JSONMarshal,
+	// with its randomly-ordered fields, and so it isn't going to reproduce precisely what
+	// a different marshaler might have produced.  But it's close enough for our purposes.
+	payloadLen := len(snote.Payload)
+	if totalPayloadLen > 0 {
+		payloadLen = totalPayloadLen
+	}
+	ctx = ContextWithWireLen(ctx, jcWireLen(snote.Body, nil)+uint32(payloadLen))
+
 	// The payloadOffset field serves dual purpose:
 	// - For GET requests without payload: byte offset for HTTP Range header
 	// - For POST requests with segmented payload: offset where this segment starts
@@ -541,6 +560,7 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 
 	// If an MD5 field is present, verify this segment's integrity
 	if len(snote.Payload) > 0 && req.SessionTrigger != "" {
+		// nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 -- no MD5 collision risk here: nothing trusts the hash, it only detects transit corruption of the payload
 		if !strings.EqualFold(req.SessionTrigger, fmt.Sprintf("%x", md5.Sum(snote.Payload))) {
 			return fmt.Errorf("payload was corrupted on the network in transit from notecard to notehub " + note.ErrWebPayload)
 		}
@@ -623,6 +643,7 @@ func hubWebRequest(ctx context.Context, session *HubSession, req notehubMessage,
 
 	// If there's a payload, return its MD5 to the caller so the device can check for corruption
 	if len(rspPayload) > 0 {
+		// nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 -- no MD5 collision risk here: nothing trusts the hash, it only detects transit corruption of the payload
 		rsp.SessionTrigger = fmt.Sprintf("%x", md5.Sum(rspPayload))
 	}
 
@@ -902,6 +923,10 @@ func hubNoteboxUpdateChangeTracker(ctx context.Context, session *HubSession, req
 
 // Notefile Changes
 func hubNotefileChanges(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
+	if NotefileIsLocalOnly(req.NotefileID) {
+		return nil
+	}
+
 	// Open the box
 	box, _, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
@@ -942,6 +967,9 @@ func hubNotefileChanges(ctx context.Context, session *HubSession, req notehubMes
 
 // Notefile Merge
 func hubNotefileMerge(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
+	if NotefileIsLocalOnly(req.NotefileID) {
+		return nil
+	}
 
 	// Open the box
 	box, ei, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
@@ -1005,6 +1033,9 @@ func hubNotefilesMerge(ctx context.Context, session *HubSession, req notehubMess
 
 	// Loop over the incoming notefiles
 	for NotefileID, chgfile := range fileset {
+		if NotefileIsLocalOnly(NotefileID) {
+			continue
+		}
 
 		// Open the specified notefile
 		openfile, file, err5 := box.OpenNotefile(ctx, NotefileID)
@@ -1039,6 +1070,10 @@ func hubNotefilesMerge(ctx context.Context, session *HubSession, req notehubMess
 
 // Update the tracker
 func hubNotefileUpdateChangeTracker(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
+	if NotefileIsLocalOnly(req.NotefileID) {
+		return nil
+	}
+
 	// Open the box
 	box, _, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
@@ -1134,6 +1169,10 @@ func hubNoteboxSummary(ctx context.Context, session *HubSession, req notehubMess
 // Notefile AddNote, which is used only by the (undocumented) "live" note add
 // NotefileIDs is overloaded with the OLC 'where' of the note, if any.
 func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
+	if NotefileIsLocalOnly(req.NotefileID) {
+		return nil
+	}
+
 	// Open the box
 	box, ei, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
@@ -1169,9 +1208,19 @@ func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMes
 	}
 	payload := req.GetPayload()
 
+	// The note's length is that of its body and payload as they were transmitted on the wire.  Note
+	// however that this isn't the entire on-wire size because it doesn't take into account the
+	// actual request message itself, which is not part of the body/payload but rather which were
+	// in this "req" structure and encoded on the wire as part of the notecard-notehub RPC.
+	wireLen := uint32(req.GetBodyWireLen() + len(payload))
+
 	// See if this is a special note that has a payload that was encoded with a template specified in the body
 	decodePayloadWithTemplateFlag := uint32(0x00000001)
 	if err == nil && len(payload) > 0 && (req.PowerSource&decodePayloadWithTemplateFlag) != 0 {
+
+		// The template in the body isn't user data, so only the template-encoded payload is counted
+		// in this type of encoding.
+		wireLen = uint32(len(payload))
 
 		// The template is in the body
 		binTemplateJSON := body
@@ -1220,6 +1269,7 @@ func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMes
 			newNote.Histories = &histories
 
 			// Add the note to the notefile with history set up here
+			ei.WireLen = wireLen
 			_, err = file.AddNoteWithHistory(ctx, ei, req.DeviceEndpointID, req.NoteID, newNote)
 			if err == nil {
 
@@ -1248,6 +1298,10 @@ func hubNotefileAddNote(ctx context.Context, session *HubSession, req notehubMes
 
 // Notefile DeleteNote
 func hubNotefileDeleteNote(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
+	if NotefileIsLocalOnly(req.NotefileID) {
+		return nil
+	}
+
 	// Open the box
 	box, ei, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
@@ -1281,6 +1335,10 @@ func hubNotefileDeleteNote(ctx context.Context, session *HubSession, req notehub
 
 // Notefile UpdateNote
 func hubNotefileUpdateNote(ctx context.Context, session *HubSession, req notehubMessage, rsp *notehubMessage, event EventFunc) (err error) {
+	if NotefileIsLocalOnly(req.NotefileID) {
+		return nil
+	}
+
 	// Open the box
 	box, ei, _, err2 := openHubNoteboxForDevice(ctx, session, req.DeviceUID, req.DeviceSN, req.ProductUID, req.DeviceEndpointID, event)
 	if err2 != nil {
@@ -1320,6 +1378,8 @@ func hubNotefileUpdateNote(ctx context.Context, session *HubSession, req notehub
 		}
 	}
 	if err == nil {
+		// The note's length is that of its body and payload as they were transmitted on the wire
+		ei.WireLen = uint32(req.GetBodyWireLen() + len(req.GetPayload()))
 		err = file.UpdateNote(ctx, ei, req.DeviceEndpointID, req.NoteID, xnote)
 	}
 

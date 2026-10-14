@@ -233,6 +233,30 @@ func jsonCompress(normal []byte) (compressed []byte, err error) {
 	return
 }
 
+// jcWireLen approximates how many bytes a note occupied inside a "jc" compressed
+// notefile, for use in note.Event.WireLen: the body re-marshaled with the same token
+// substitutions the Notecard applies (including "true", which the Notecard substitutes
+// even though jsonCompress does not), plus the binary payload length.  The jc header
+// byte, the jc3 substitution table, and Snappy are excluded because they span the whole
+// notefile rather than this one note.
+func jcWireLen(body map[string]interface{}, payload []byte) uint32 {
+	n := len(payload)
+	if len(body) > 0 {
+		bodyJSON, err := note.JSONMarshal(body)
+		if err == nil {
+			str := string(bodyJSON)
+			str = strings.Replace(str, from3, to3, -1)
+			str = strings.Replace(str, from4, to4, -1)
+			str = strings.Replace(str, from5, to5, -1)
+			str = strings.Replace(str, from6, to6, -1)
+			str = strings.Replace(str, from7, to7, -1)
+			str = strings.Replace(str, from8, to8, -1)
+			n += len(str)
+		}
+	}
+	return uint32(n)
+}
+
 // snappyDecodeLimited decodes a Snappy block but rejects inputs whose declared
 // decoded length exceeds maxWirePayloadBytes, so a tiny payload can't force a
 // huge allocation.
@@ -657,6 +681,15 @@ func (msg *notehubMessage) GetBody() (body map[string]interface{}, err error) {
 	}
 
 	return
+}
+
+// GetBodyWireLen gets the number of bytes that the body occupied on the wire, in its
+// compressed form, when the notehubMessage was received
+func (msg *notehubMessage) GetBodyWireLen() int {
+	if msg.nf == nil {
+		return 0
+	}
+	return msg.nf.bodyWireLen
 }
 
 // SetPayload sets the payload within the a notehubMessage data structure
@@ -1935,6 +1968,7 @@ func msgFromWireTrace(ctx context.Context, wire []byte, trace bool) (msg notehub
 		}
 
 		msg.nf.Body = &map[string]interface{}{}
+		msg.nf.bodyWireLen = bytesLen
 		jdata, err2 := jsonDecompressTrace(compressedData, trace)
 		if err2 != nil {
 			err = err2
@@ -2387,6 +2421,12 @@ func (h *PacketHandler) PacketFromWire(wire []byte) (msg Packet, err error) {
 		}
 		msg.MessagePort = msg.Data[0]
 		msg.Data = msg.Data[1:]
+		// Note that this is not a wholly accurate representation of
+		// how much it took to encode this over the wire, because it
+		// doesn't take into account the surrounding overhead that
+		// was already removed by the packet handler for skylo or
+		// iridium etc, but it's a reasonable estimate for our purposes.
+		msg.WireDataLen = len(msg.Data)
 
 		// If the packet's data was compressed, decompress it
 		if len(msg.Data) > 0 && (packetFlags&PacketFlagCompressed) != 0 {
@@ -2433,6 +2473,7 @@ func (h *PacketHandler) PacketFromWire(wire []byte) (msg Packet, err error) {
 	}
 	msg.MessagePort = cleartext[0]
 	msg.Data = cleartext[1:]
+	msg.WireDataLen = len(msg.Data)
 
 	// If the packet's data was compressed, decompress it
 	if len(msg.Data) > 0 {
