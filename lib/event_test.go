@@ -1,6 +1,7 @@
 package notelib
 
 import (
+	"math"
 	"testing"
 
 	"github.com/blues/note-go/note"
@@ -102,4 +103,44 @@ func TestGenerateEventUidWhenMsAndSensor(t *testing.T) {
 	require.Equal(t, GenerateEventUid(&msOnly),
 		GenerateEventUid(&note.Event{DeviceUID: "dev:1", WhenMs: 1500}))
 	require.True(t, isValidUUID(GenerateEventUid(&msOnly)))
+}
+
+func TestGenerateEventUidBatch(t *testing.T) {
+	base := note.Event{
+		DeviceUID:  "dev:1",
+		SensorUID:  "san:1",
+		NotefileID: "data.qo",
+		WhenMs:     1800000000100,
+		Body:       &map[string]interface{}{"temperature": 20},
+	}
+	batch := base
+	batch.BulkReceived = 1800000000.123456
+	batch.BulkTotal = 10
+	batch.BulkNumber = 1
+	batchUID := GenerateEventUid(&batch)
+	require.NotEqual(t, GenerateEventUid(&base), batchUID)
+	require.Equal(t, batchUID, GenerateEventUid(&batch), "the same batch row remains deterministic")
+
+	for _, tc := range []struct {
+		name   string
+		change func(*note.Event)
+	}{
+		{"received", func(e *note.Event) {
+			e.BulkReceived = math.Nextafter(batch.BulkReceived, math.Inf(1))
+		}},
+		{"total", func(e *note.Event) { e.BulkTotal = batch.BulkTotal + 1 }},
+		{"number", func(e *note.Event) { e.BulkNumber = batch.BulkNumber + 1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := batch
+			tc.change(&changed)
+			require.NotEqual(t, batchUID, GenerateEventUid(&changed),
+				"batch metadata must distinguish otherwise identical samples")
+
+			onlyField := base
+			tc.change(&onlyField)
+			require.NotEqual(t, GenerateEventUid(&base), GenerateEventUid(&onlyField),
+				"each batch field must participate even when the other two are zero")
+		})
+	}
 }

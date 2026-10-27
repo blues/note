@@ -1221,12 +1221,11 @@ func (tmplContext *BulkTemplateContext) BulkEncodeNextEntry(ctx context.Context,
 		err = fmt.Errorf("bulk: template error: %s", err)
 		return
 	}
-	if body != nil {
-		err = tmplContext.walkObjectInto(ctx, 0, to, body)
-		if err != nil {
-			err = fmt.Errorf("bulk: %s", err)
-			return
-		}
+	// Encode every field even with no body, since the decoder reads them all
+	err = tmplContext.walkObjectInto(ctx, 0, to, body)
+	if err != nil {
+		err = fmt.Errorf("bulk: %s", err)
+		return
 	}
 
 	// Remember the beginning of the variable-length data because
@@ -2030,10 +2029,8 @@ func (tmplContext *BulkTemplateContext) processTemplateValue(ctx context.Context
 
 	case fastjson.TypeObject:
 		o, _ := v.Object()
-		subObject, testOk := dov.(map[string]interface{})
-		if dov == nil || !testOk || subObject == nil {
-			return
-		}
+		// Anything but an object encodes as an empty one, since the decoder reads every field
+		subObject, _ := dov.(map[string]interface{})
 		err = tmplContext.walkObjectInto(ctx, level, o, subObject)
 
 	case fastjson.TypeArray:
@@ -2247,6 +2244,10 @@ func (tmplContext *BulkTemplateContext) walkArray(ctx context.Context, level int
 
 	level++
 
+	// A missing array encodes as an empty one, since the decoder reads every element
+	if da == nil {
+		da = []interface{}{}
+	}
 	for i := 0; i < len(a); i++ {
 		switch dav := da.(type) {
 		case []interface{}:

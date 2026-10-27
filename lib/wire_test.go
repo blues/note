@@ -66,8 +66,8 @@ func TestMsgFromWire(t *testing.T) {
 			} else {
 				t.Logf("Buffer %d SUCCESS: wirelen=%d", i+1, wirelen)
 				t.Logf("  Message Type: %s", msg.MessageType)
-				t.Logf("  Device UID: %s", msg.DeviceUID)
-				t.Logf("  Product UID: %s", msg.ProductUID)
+				t.Logf("  DeviceUID: %s", msg.DeviceUID)
+				t.Logf("  ProductUID: %s", msg.ProductUID)
 				if msg.Error != "" {
 					t.Logf("  Error: %s", msg.Error)
 				}

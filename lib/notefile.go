@@ -12,6 +12,7 @@ package notelib
 import (
 	"context"
 	"fmt"
+
 	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- no weak-randomness risk here: math/rand only spreads Note IDs, never a secret
 	"math/rand"
 	"strings"
@@ -330,7 +331,7 @@ func (nf *Notefile) event(ctx context.Context, ei *NotefileEventInfo, local bool
 	}
 
 	// Now that the event has been initialized, generate a UID.  Note that if we are
-	// generating it locally, generate a totally unique event UID because we know for a
+	// generating it locally, generate a totally unique EventUID because we know for a
 	// fact that the even isn't going to be a duplicate of one generated anywhere else,
 	// and otherwise generate a UID that is content-dependent so that if the notecard
 	// uploads duplicates they won't be saved.

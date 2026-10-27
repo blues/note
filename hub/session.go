@@ -58,7 +58,7 @@ func sessionHandler(connSession net.Conn, secure bool) {
 
 			// Exit if no DeviceUID, at a minimum because this is needed for authentication
 			if sessionContext.Session.DeviceUID == "" {
-				fmt.Printf("session: device UID is missing from request\n")
+				fmt.Printf("session: DeviceUID is missing from request\n")
 				break
 			}
 

@@ -3,7 +3,7 @@ module github.com/blues/note
 go 1.25.1
 
 require (
-	github.com/blues/note-go v1.11.1
+	github.com/blues/note-go v1.12.1
 	github.com/golang/snappy v1.0.0
 	github.com/google/open-location-code/go v0.0.0-20220120191843-cafb35c0d74d
 	github.com/google/uuid v1.6.0

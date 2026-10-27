@@ -99,7 +99,7 @@ func deviceGetOrProvision(deviceUID string, deviceSN string, productUID string) 
 	return
 }
 
-// Look up, in persistent storage, which app currently 'owns' the reservation for this product UID
+// Look up, in persistent storage, which app currently 'owns' the reservation for this ProductUID
 func appOwningProduct(productUID string) (appUID string, err error) {
 	return
 }

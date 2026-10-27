@@ -460,6 +460,11 @@ func (box *Notebox) Request(ctx context.Context, ei *NotefileEventInfo, endpoint
 			// Get the number of pending changes.  Note that if we didn't supply a tracker,
 			// we supply all the results even if there are 0 changes (0 notes) in the notefile.
 			openfile, file, err := box.OpenNotefile(ctx, notefileID)
+			if note.ErrorContains(err, note.ErrNotefileNoExist) {
+				// Listed in the notebox but not openable here, so one bad entry doesn't fail the whole listing
+				logDebug(ctx, "file.changes: skipping notefile %s: %s", notefileID, err)
+				continue
+			}
 			if err != nil {
 				rsp.Err = fmt.Sprintf("error opening notefile %s to get changes: %s", notefileID, err)
 				break

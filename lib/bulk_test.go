@@ -715,6 +715,26 @@ func TestOLCEncodingRoundTrip(t *testing.T) {
 	}
 }
 
+// A device-supplied _loc4 with its top bit set shifts into a negative OLC64; decoding it
+// must yield no OLC rather than panic
+func TestBulkDecodeNegativeOLC(t *testing.T) {
+	ctx := context.Background()
+	// The encoder fills _loc4 from the OLC argument, so encode the raw value under another
+	// name- a single uint32 field has the same wire layout either way
+	encoded := bulkEncodeOne(t, BulkNoteFormatFlexNano, `{"v":24}`, map[string]interface{}{"v": 0xFFFFFFFF})
+
+	decodeCtx, err := BulkDecodeTemplate(ctx, bulkTemplateJSON(t, BulkNoteFormatFlexNano, `{"_loc4":24}`), encoded)
+	require.NoError(t, err)
+
+	var olc string
+	var success bool
+	require.NotPanics(t, func() {
+		_, _, _, _, olc, _, success = decodeCtx.BulkDecodeNextEntry(ctx)
+	})
+	require.True(t, success)
+	assert.Empty(t, olc)
+}
+
 // TestBulkTimeFieldType23 tests the type 23 encoding for _time field
 // which provides 256-second granularity to save 1 byte for satellite
 func TestBulkTimeFieldType23(t *testing.T) {
@@ -1113,6 +1133,55 @@ func TestVariableLengthArrayMissingField(t *testing.T) {
 			assert.Empty(t, arr, "when_ms_32 should round-trip as empty array")
 		}
 	})
+}
+
+// Missing values, and objects of another type, encode as empty ones, since the decoder reads every
+// field the template defines
+func TestBulkEncodeMissingValues(t *testing.T) {
+	ctx := context.Background()
+	payload := []byte{1, 2, 3}
+	cases := []struct {
+		name     string
+		template string
+		body     string // "" for no body
+		empty    string // the same note with those values given as empty
+		decoded  string
+	}{
+		{"no body", `{"seq":12,"sub":{"a":11},"pos":[14.1,14.1]}`, "", `{"seq":0,"sub":{},"pos":[]}`, `{"sub":{},"pos":[0,0]}`},
+		{"missing object", `{"seq":12,"sub":{"a":11},"n":11}`, `{"seq":5,"n":1}`, `{"seq":5,"sub":{},"n":1}`, `{"seq":5,"sub":{},"n":1}`},
+		{"null object", `{"seq":12,"sub":{"a":11},"n":11}`, `{"seq":5,"sub":null,"n":1}`, `{"seq":5,"sub":{},"n":1}`, `{"seq":5,"sub":{},"n":1}`},
+		{"object of another type", `{"seq":12,"sub":{"a":11},"n":11}`, `{"seq":5,"sub":"x","n":1}`, `{"seq":5,"sub":{},"n":1}`, `{"seq":5,"sub":{},"n":1}`},
+		{"missing nested object", `{"a":{"b":{"c":11}},"d":11}`, `{"a":{},"d":3}`, `{"a":{"b":{}},"d":3}`, `{"a":{"b":{}},"d":3}`},
+		{"missing array", `{"pos":[14.1,14.1],"n":11}`, `{"n":1}`, `{"pos":[],"n":1}`, `{"pos":[0,0],"n":1}`},
+		{"null array", `{"pos":[14.1,14.1],"n":11}`, `{"pos":null,"n":1}`, `{"pos":[],"n":1}`, `{"pos":[0,0],"n":1}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			templateJSON := bulkTemplateJSON(t, BulkNoteFormatFlexNano, c.template)
+			encode := func(bodyJSON string) []byte {
+				var body map[string]interface{}
+				if bodyJSON != "" {
+					require.NoError(t, note.JSONUnmarshal([]byte(bodyJSON), &body))
+				}
+				encodeCtx, err := BulkEncodeTemplate(templateJSON)
+				require.NoError(t, err)
+				record, err := encodeCtx.BulkEncodeNextEntry(ctx, body, payload, 0, 0, "", "", false)
+				require.NoError(t, err)
+				return record
+			}
+			record := encode(c.body)
+			require.Equal(t, encode(c.empty), record)
+
+			decodeCtx, err := BulkDecodeTemplate(ctx, templateJSON, record)
+			require.NoError(t, err)
+			body, decodedPayload, _, _, _, _, ok := decodeCtx.BulkDecodeNextEntry(ctx)
+			require.True(t, ok)
+			bodyJSON, err := note.JSONMarshal(body)
+			require.NoError(t, err)
+			require.JSONEq(t, c.decoded, string(bodyJSON))
+			require.Equal(t, payload, decodedPayload)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------------------------

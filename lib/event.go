@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/blues/note-go/note"
@@ -20,7 +21,7 @@ import (
 // EventFunc is the func to get called whenever there is a note add/update/delete
 type EventFunc func(ctx context.Context, sess *HubSession, local bool, data *note.Event) (err error)
 
-// Generate a UUID for an event in a way that will allow detection of duplicates of "user data"
+// Generate a UUID for an event from its user data and batch identity, allowing duplicate detection.
 func GenerateEventUid(event *note.Event) string {
 
 	// If the captured date is unknown, we can't make any assumptions about duplication.
@@ -54,6 +55,17 @@ func GenerateEventUid(event *note.Event) string {
 		binary.LittleEndian.PutUint64(whenBytes, uint64(event.When))
 	}
 	h.Write(whenBytes)
+
+	// Include batch identity and row position so identical samples in a batch or
+	// in separately received batches remain distinct. Leave non-batch UIDs unchanged.
+	if event.BulkReceived != 0 || event.BulkTotal != 0 || event.BulkNumber != 0 {
+		h.Write([]byte{0})
+		var batchBytes [16]byte
+		binary.LittleEndian.PutUint64(batchBytes[:8], math.Float64bits(event.BulkReceived))
+		binary.LittleEndian.PutUint32(batchBytes[8:12], event.BulkTotal)
+		binary.LittleEndian.PutUint32(batchBytes[12:], event.BulkNumber)
+		h.Write(batchBytes[:])
+	}
 
 	// Hash notefileID and noteID
 	h.Write([]byte(event.NotefileID))

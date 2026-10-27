@@ -210,6 +210,9 @@ type HubSession struct {
 	Transactions               int
 	LastCalibratedNotecardTime int64
 
+	// Byte counter under the device connection (TCP/TLS sessions only; nil otherwise)
+	WireConn *CountingConn
+
 	// Used for hubreq.go to retain inter-transaction state
 	Notefiles        []string
 	NotefilesUpdated bool
@@ -410,6 +413,9 @@ const UdpMaxMtu = 548 // Minimum internet datagram is 576, IPv4 header is 20, UD
 const UdpPs = "udp:"
 const UdpMtu = UdpMinMtu
 const UdpCidType = CidRandom
+
+// PacketUsage key for Notehub-measured TCP bytes on TCP/TLS sessions.  Like UDP, there is no ID.
+const TcpPs = "tcp:"
 
 // After trying AES GCM and struggling with block size and tag size constraints, and after then consulting
 // with the folks at WolfSSL, we arrived at using the ChaCha20 stream cipher (thus eliminating block constraints)

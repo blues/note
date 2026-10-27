@@ -38,7 +38,8 @@ var bytesToChars = map[int]int{
 // OLCFromINT64Bytes converts a truncated OLC code into a valid OLC string
 // byteCount indicates how many bytes were actually stored (4, 5, 6, 7, or 8)
 func OLCFromINT64Bytes(code int64, byteCount int) (olc string) {
-	if code == 0 {
+	// A negative code would index codeTable out of range below
+	if code <= 0 {
 		return ""
 	}
 
